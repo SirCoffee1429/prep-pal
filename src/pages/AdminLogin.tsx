@@ -40,6 +40,9 @@ const AdminLogin = () => {
 
           if (roleError) {
             console.error("Error assigning role:", roleError);
+            // Sign out the user if role assignment fails
+            await supabase.auth.signOut();
+            throw new Error("Failed to assign admin role. Please try again.");
           }
 
           toast({
