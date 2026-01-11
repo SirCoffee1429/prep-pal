@@ -13,6 +13,10 @@ export default {
       },
     },
     extend: {
+      fontFamily: {
+        display: ["Playfair Display", "Georgia", "serif"],
+        sans: ["Inter", "system-ui", "sans-serif"],
+      },
       colors: {
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",
@@ -57,6 +61,25 @@ export default {
           border: "hsl(var(--sidebar-border))",
           ring: "hsl(var(--sidebar-ring))",
         },
+        status: {
+          open: "hsl(var(--status-open))",
+          "open-foreground": "hsl(var(--status-open-foreground))",
+          progress: "hsl(var(--status-progress))",
+          "progress-foreground": "hsl(var(--status-progress-foreground))",
+          complete: "hsl(var(--status-complete))",
+          "complete-foreground": "hsl(var(--status-complete-foreground))",
+        },
+        station: {
+          grill: "hsl(var(--station-grill))",
+          saute: "hsl(var(--station-saute))",
+          fry: "hsl(var(--station-fry))",
+          salad: "hsl(var(--station-salad))",
+          line: "hsl(var(--station-line))",
+        },
+        recipe: {
+          bg: "hsl(var(--recipe-bg))",
+          foreground: "hsl(var(--recipe-foreground))",
+        },
       },
       borderRadius: {
         lg: "var(--radius)",
@@ -65,25 +88,22 @@ export default {
       },
       keyframes: {
         "accordion-down": {
-          from: {
-            height: "0",
-          },
-          to: {
-            height: "var(--radix-accordion-content-height)",
-          },
+          from: { height: "0" },
+          to: { height: "var(--radix-accordion-content-height)" },
         },
         "accordion-up": {
-          from: {
-            height: "var(--radix-accordion-content-height)",
-          },
-          to: {
-            height: "0",
-          },
+          from: { height: "var(--radix-accordion-content-height)" },
+          to: { height: "0" },
+        },
+        "pulse-status": {
+          "0%, 100%": { opacity: "1" },
+          "50%": { opacity: "0.7" },
         },
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
         "accordion-up": "accordion-up 0.2s ease-out",
+        "pulse-status": "pulse-status 2s ease-in-out infinite",
       },
     },
   },
