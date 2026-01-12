@@ -30,16 +30,12 @@ serve(async (req) => {
       );
     }
 
-    const systemPrompt = `You are a professional recipe parser for a country club kitchen. You extract structured recipe data from Production Spec spreadsheet content.
+const systemPrompt = `You are a professional recipe parser for a country club kitchen. You extract structured recipe data from Production Spec spreadsheet content.
 
 The spreadsheet follows this format:
 - Row 1: "Production Spec For: [Recipe Name]"
 - Ingredients table with columns: Item, Quantity, Measure, Unit Cost, Total Cost
 - "Assembly:" section with numbered method steps
-- Yield Amount and Yield Measure fields
-- Shelf Life (in days) field
-- Tools & Supplies list
-- Vehicle field (plating vessel)
 - Cost information: Recipe Cost, Portion Cost, Menu Price, Food Cost %
 
 IMPORTANT: The content may contain MULTIPLE sheets/recipes. Each sheet starts with "=== Sheet: [name] ===" separator. Parse ALL recipes from ALL sheets.
@@ -48,16 +44,10 @@ For each recipe found, extract:
 1. name: The recipe name from "Production Spec For:"
 2. ingredients: Array of {item, quantity, measure, unit_cost, total_cost}
 3. method: The assembly/method steps as a single string
-4. yield_amount: The yield quantity
-5. yield_measure: The yield unit (e.g., "servings", "portions")
-6. shelf_life: Shelf life text (e.g., "7 days")
-7. tools: Array of tool/supply names
-8. vehicle: Plating vessel (e.g., "Long plate", "Bowl")
-9. plating_notes: Any plating or presentation notes
-10. recipe_cost: Total recipe cost as number
-11. portion_cost: Cost per portion as number
-12. menu_price: Menu selling price as number
-13. food_cost_percent: Food cost percentage as number
+4. recipe_cost: Total recipe cost as number
+5. portion_cost: Cost per portion as number
+6. menu_price: Menu selling price as number
+7. food_cost_percent: Food cost percentage as number
 
 Return a JSON object with a "recipes" array containing all parsed recipes.`;
 
@@ -103,12 +93,6 @@ Return a JSON object with a "recipes" array containing all parsed recipes.`;
                           },
                         },
                         method: { type: "string", description: "Assembly/method steps" },
-                        yield_amount: { type: "string" },
-                        yield_measure: { type: "string" },
-                        shelf_life: { type: "string" },
-                        tools: { type: "array", items: { type: "string" } },
-                        vehicle: { type: "string", description: "Plating vessel" },
-                        plating_notes: { type: "string" },
                         recipe_cost: { type: "number" },
                         portion_cost: { type: "number" },
                         menu_price: { type: "number" },
