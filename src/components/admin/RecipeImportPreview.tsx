@@ -16,7 +16,7 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
-import { Loader2, ChefHat, DollarSign, Clock, Utensils } from "lucide-react";
+import { Loader2, ChefHat, DollarSign } from "lucide-react";
 
 export interface ParsedIngredient {
   item: string;
@@ -30,12 +30,6 @@ export interface ParsedRecipe {
   name: string;
   ingredients: ParsedIngredient[];
   method?: string;
-  yield_amount?: string;
-  yield_measure?: string;
-  shelf_life?: string;
-  tools?: string[];
-  vehicle?: string;
-  plating_notes?: string;
   recipe_cost?: number;
   portion_cost?: number;
   menu_price?: number;
@@ -134,20 +128,8 @@ const RecipeImportPreview = ({
 
                 <AccordionContent className="pb-4">
                   <div className="space-y-4 pl-7">
-                    {/* Quick Stats */}
+                    {/* Cost Stats (Admin only) */}
                     <div className="flex flex-wrap gap-4 text-sm">
-                      {recipe.yield_amount && (
-                        <div className="flex items-center gap-1 text-muted-foreground">
-                          <Utensils className="h-3.5 w-3.5" />
-                          Yield: {recipe.yield_amount} {recipe.yield_measure}
-                        </div>
-                      )}
-                      {recipe.shelf_life && (
-                        <div className="flex items-center gap-1 text-muted-foreground">
-                          <Clock className="h-3.5 w-3.5" />
-                          Shelf: {recipe.shelf_life}
-                        </div>
-                      )}
                       {recipe.menu_price !== undefined && (
                         <div className="flex items-center gap-1 text-muted-foreground">
                           <DollarSign className="h-3.5 w-3.5" />
@@ -192,22 +174,6 @@ const RecipeImportPreview = ({
                         </p>
                       </div>
                     )}
-
-                    {/* Tools & Plating */}
-                    <div className="flex gap-4 text-sm">
-                      {recipe.tools && recipe.tools.length > 0 && (
-                        <div>
-                          <span className="text-muted-foreground">Tools:</span>{" "}
-                          {recipe.tools.join(", ")}
-                        </div>
-                      )}
-                      {recipe.vehicle && (
-                        <div>
-                          <span className="text-muted-foreground">Plating:</span>{" "}
-                          {recipe.vehicle}
-                        </div>
-                      )}
-                    </div>
                   </div>
                 </AccordionContent>
               </AccordionItem>
