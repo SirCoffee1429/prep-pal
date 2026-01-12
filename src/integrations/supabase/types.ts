@@ -160,32 +160,59 @@ export type Database = {
         Row: {
           created_at: string
           file_url: string | null
+          food_cost_percent: number | null
           id: string
           ingredients: Json | null
+          menu_price: number | null
           method: string | null
           name: string
           plating_notes: string | null
+          portion_cost: number | null
+          recipe_cost: number | null
+          shelf_life: string | null
+          tools: Json | null
           updated_at: string
+          vehicle: string | null
+          yield_amount: string | null
+          yield_measure: string | null
         }
         Insert: {
           created_at?: string
           file_url?: string | null
+          food_cost_percent?: number | null
           id?: string
           ingredients?: Json | null
+          menu_price?: number | null
           method?: string | null
           name: string
           plating_notes?: string | null
+          portion_cost?: number | null
+          recipe_cost?: number | null
+          shelf_life?: string | null
+          tools?: Json | null
           updated_at?: string
+          vehicle?: string | null
+          yield_amount?: string | null
+          yield_measure?: string | null
         }
         Update: {
           created_at?: string
           file_url?: string | null
+          food_cost_percent?: number | null
           id?: string
           ingredients?: Json | null
+          menu_price?: number | null
           method?: string | null
           name?: string
           plating_notes?: string | null
+          portion_cost?: number | null
+          recipe_cost?: number | null
+          shelf_life?: string | null
+          tools?: Json | null
           updated_at?: string
+          vehicle?: string | null
+          yield_amount?: string | null
+          yield_measure?: string | null
         }
         Relationships: []
       }

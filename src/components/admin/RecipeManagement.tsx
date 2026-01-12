@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,11 +21,16 @@ import {
 } from "@/components/ui/dialog";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Pencil, Trash2, Loader2, Upload, Eye } from "lucide-react";
+import { Plus, Pencil, Trash2, Loader2, Upload, Eye, FileSpreadsheet } from "lucide-react";
+import * as XLSX from "xlsx";
+import RecipeImportPreview, { ParsedRecipe, ParsedIngredient } from "./RecipeImportPreview";
 
 interface Ingredient {
   item: string;
   quantity: string;
+  measure?: string;
+  unit_cost?: number;
+  total_cost?: number;
 }
 
 interface Recipe {
@@ -35,6 +40,15 @@ interface Recipe {
   method: string | null;
   plating_notes: string | null;
   file_url: string | null;
+  yield_amount?: string | null;
+  yield_measure?: string | null;
+  shelf_life?: string | null;
+  tools?: string[] | null;
+  vehicle?: string | null;
+  recipe_cost?: number | null;
+  portion_cost?: number | null;
+  menu_price?: number | null;
+  food_cost_percent?: number | null;
 }
 
 const RecipeManagement = () => {
@@ -45,6 +59,13 @@ const RecipeManagement = () => {
   const [editingRecipe, setEditingRecipe] = useState<Recipe | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+
+  // Import state
+  const [isParsing, setIsParsing] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
+  const [showImportPreview, setShowImportPreview] = useState(false);
+  const [parsedRecipes, setParsedRecipes] = useState<ParsedRecipe[]>([]);
+  const importInputRef = useRef<HTMLInputElement>(null);
 
   // Form state
   const [name, setName] = useState("");
@@ -67,11 +88,30 @@ const RecipeManagement = () => {
       if (error) throw error;
 
       const transformedRecipes: Recipe[] = (data || []).map((r) => ({
-        ...r,
+        id: r.id,
+        name: r.name,
+        method: r.method,
+        plating_notes: r.plating_notes,
+        file_url: r.file_url,
+        yield_amount: r.yield_amount,
+        yield_measure: r.yield_measure,
+        shelf_life: r.shelf_life,
+        vehicle: r.vehicle,
+        recipe_cost: r.recipe_cost,
+        portion_cost: r.portion_cost,
+        menu_price: r.menu_price,
+        food_cost_percent: r.food_cost_percent,
         ingredients: r.ingredients
           ? (typeof r.ingredients === "string"
               ? JSON.parse(r.ingredients)
               : (r.ingredients as unknown as Ingredient[]))
+          : null,
+        tools: r.tools
+          ? (Array.isArray(r.tools)
+              ? r.tools as string[]
+              : typeof r.tools === "string"
+              ? JSON.parse(r.tools)
+              : null)
           : null,
       }));
 
@@ -115,7 +155,7 @@ const RecipeManagement = () => {
     setIngredients([...ingredients, { item: "", quantity: "" }]);
   };
 
-  const updateIngredient = (index: number, field: keyof Ingredient, value: string) => {
+  const updateIngredient = (index: number, field: "item" | "quantity", value: string) => {
     const updated = [...ingredients];
     updated[index][field] = value;
     setIngredients(updated);
@@ -124,6 +164,127 @@ const RecipeManagement = () => {
   const removeIngredient = (index: number) => {
     if (ingredients.length > 1) {
       setIngredients(ingredients.filter((_, i) => i !== index));
+    }
+  };
+
+  // Excel import functions
+  const parseExcelToText = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const data = new Uint8Array(e.target?.result as ArrayBuffer);
+          const workbook = XLSX.read(data, { type: "array" });
+          
+          let allText = "";
+          workbook.SheetNames.forEach((sheetName) => {
+            const worksheet = workbook.Sheets[sheetName];
+            const sheetText = XLSX.utils.sheet_to_csv(worksheet);
+            allText += `\n=== Sheet: ${sheetName} ===\n${sheetText}\n`;
+          });
+          
+          resolve(allText);
+        } catch (error) {
+          reject(error);
+        }
+      };
+      reader.onerror = () => reject(reader.error);
+      reader.readAsArrayBuffer(file);
+    });
+  };
+
+  const handleImportClick = () => {
+    importInputRef.current?.click();
+  };
+
+  const handleImportFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    
+    // Reset input so same file can be selected again
+    e.target.value = "";
+
+    if (!file.name.endsWith(".xlsx") && !file.name.endsWith(".xls")) {
+      toast({
+        title: "Invalid File",
+        description: "Please select an Excel file (.xlsx or .xls)",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsParsing(true);
+    try {
+      const fileContent = await parseExcelToText(file);
+      
+      const { data, error } = await supabase.functions.invoke("parse-recipe", {
+        body: { fileContent, fileName: file.name },
+      });
+
+      if (error) throw error;
+      
+      if (!data?.recipes || data.recipes.length === 0) {
+        toast({
+          title: "No Recipes Found",
+          description: "Could not extract any recipes from this file",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      setParsedRecipes(data.recipes);
+      setShowImportPreview(true);
+    } catch (error) {
+      console.error("Import error:", error);
+      toast({
+        title: "Import Failed",
+        description: error instanceof Error ? error.message : "Failed to parse recipe file",
+        variant: "destructive",
+      });
+    } finally {
+      setIsParsing(false);
+    }
+  };
+
+  const handleImportRecipes = async (recipesToImport: ParsedRecipe[]) => {
+    setIsImporting(true);
+    try {
+      const insertData = recipesToImport.map((r) => ({
+        name: r.name,
+        ingredients: r.ingredients ? JSON.stringify(r.ingredients) : null,
+        method: r.method || null,
+        plating_notes: r.plating_notes || null,
+        yield_amount: r.yield_amount || null,
+        yield_measure: r.yield_measure || null,
+        shelf_life: r.shelf_life || null,
+        tools: r.tools || null,
+        vehicle: r.vehicle || null,
+        recipe_cost: r.recipe_cost || null,
+        portion_cost: r.portion_cost || null,
+        menu_price: r.menu_price || null,
+        food_cost_percent: r.food_cost_percent || null,
+      }));
+
+      const { error } = await supabase.from("recipes").insert(insertData);
+      if (error) throw error;
+
+      toast({
+        title: "Import Complete",
+        description: `${recipesToImport.length} recipe${recipesToImport.length !== 1 ? "s" : ""} imported`,
+      });
+      
+      setShowImportPreview(false);
+      setParsedRecipes([]);
+      fetchRecipes();
+    } catch (error) {
+      console.error("Error importing:", error);
+      toast({
+        title: "Import Failed",
+        description: "Failed to save recipes to database",
+        variant: "destructive",
+      });
+    } finally {
+      setIsImporting(false);
     }
   };
 
@@ -238,6 +399,7 @@ const RecipeManagement = () => {
   }
 
   return (
+    <>
     <Card>
       <CardHeader className="flex flex-row items-center justify-between">
         <div>
@@ -246,13 +408,30 @@ const RecipeManagement = () => {
             Manage recipe cards for your menu items
           </CardDescription>
         </div>
-        <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-          <DialogTrigger asChild>
-            <Button onClick={() => openDialog()}>
-              <Plus className="mr-2 h-4 w-4" />
-              Add Recipe
-            </Button>
-          </DialogTrigger>
+        <div className="flex gap-2">
+          {/* Hidden import input */}
+          <input
+            ref={importInputRef}
+            type="file"
+            accept=".xlsx,.xls"
+            onChange={handleImportFileSelect}
+            className="hidden"
+          />
+          <Button variant="outline" onClick={handleImportClick} disabled={isParsing}>
+            {isParsing ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <FileSpreadsheet className="mr-2 h-4 w-4" />
+            )}
+            {isParsing ? "Parsing..." : "Import Recipe"}
+          </Button>
+          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+            <DialogTrigger asChild>
+              <Button onClick={() => openDialog()}>
+                <Plus className="mr-2 h-4 w-4" />
+                Add Recipe
+              </Button>
+            </DialogTrigger>
           <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
             <DialogHeader>
               <DialogTitle>
@@ -370,6 +549,7 @@ const RecipeManagement = () => {
             </div>
           </DialogContent>
         </Dialog>
+        </div>
       </CardHeader>
       <CardContent>
         <Table>
@@ -435,6 +615,15 @@ const RecipeManagement = () => {
         </Table>
       </CardContent>
     </Card>
+    
+    <RecipeImportPreview
+      open={showImportPreview}
+      onOpenChange={setShowImportPreview}
+      recipes={parsedRecipes}
+      onImport={handleImportRecipes}
+      isImporting={isImporting}
+    />
+    </>
   );
 };
 
