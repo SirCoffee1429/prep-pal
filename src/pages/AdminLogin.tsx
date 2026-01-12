@@ -22,7 +22,7 @@ const AdminLogin = () => {
 
     try {
       if (isSignUp) {
-        const { data, error } = await supabase.auth.signUp({
+        const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
           email,
           password,
           options: {
@@ -30,27 +30,35 @@ const AdminLogin = () => {
           },
         });
 
-        if (error) throw error;
+        if (signUpError) throw signUpError;
 
-        if (data.user) {
-          // Add admin role for new user
-          const { error: roleError } = await supabase
-            .from("user_roles")
-            .insert({ user_id: data.user.id, role: "admin" });
+        // Ensure we have an authenticated session before writing to role-protected tables.
+        // Even with auto-confirm enabled, this keeps the flow reliable.
+        const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
+          email,
+          password,
+        });
 
-          if (roleError) {
-            console.error("Error assigning role:", roleError);
-            // Sign out the user if role assignment fails
-            await supabase.auth.signOut();
-            throw new Error("Failed to assign admin role. Please try again.");
-          }
+        if (signInError) throw signInError;
 
-          toast({
-            title: "Account created",
-            description: "You can now log in with your credentials.",
-          });
-          setIsSignUp(false);
+        // Add admin role for new user
+        const { error: roleError } = await supabase
+          .from("user_roles")
+          .insert({ user_id: signInData.user.id, role: "admin" });
+
+        if (roleError) {
+          console.error("Error assigning role:", roleError);
+          await supabase.auth.signOut();
+          throw new Error("Failed to assign admin role. Please try again.");
         }
+
+        toast({
+          title: "Account created",
+          description: "Admin access granted. You can now log in.",
+        });
+
+        await supabase.auth.signOut();
+        setIsSignUp(false);
       } else {
         const { data, error } = await supabase.auth.signInWithPassword({
           email,
