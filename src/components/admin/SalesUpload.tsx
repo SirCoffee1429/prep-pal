@@ -12,14 +12,25 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { Upload, Loader2, FileText, Sparkles, Calendar } from "lucide-react";
+import { Upload, Loader2, FileText, Sparkles, Calendar, Check, X } from "lucide-react";
+import { findBestMatch, getConfidenceColor, getConfidenceLabel, type MatchResult } from "@/lib/itemMatching";
 
 interface ParsedItem {
   name: string;
   quantity: number;
+  original_name?: string;
   matched_item_id?: string;
   matched_item_name?: string;
+  match_confidence?: MatchResult['confidence'];
 }
 
 interface MenuItem {
@@ -67,6 +78,20 @@ const SalesUpload = () => {
     }
   };
 
+  const readFileAsBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result as string;
+        // Remove data URL prefix if present
+        const base64 = result.includes(',') ? result.split(',')[1] : result;
+        resolve(base64);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  };
+
   const handleUploadAndParse = async () => {
     if (!file) {
       toast({
@@ -79,38 +104,69 @@ const SalesUpload = () => {
 
     setIsParsing(true);
     try {
-      // Read file content
-      const text = await file.text();
+      let fileContent: string;
+      let isBase64 = false;
+
+      // Handle PDF files with base64 encoding
+      if (file.name.toLowerCase().endsWith('.pdf')) {
+        fileContent = await readFileAsBase64(file);
+        isBase64 = true;
+      } else {
+        // For text-based files (CSV, TXT, etc.)
+        fileContent = await file.text();
+      }
 
       // Send to AI for parsing
       const response = await supabase.functions.invoke("parse-sales", {
         body: {
-          fileContent: text,
+          fileContent,
           fileName: file.name,
           menuItems: menuItems.map((m) => m.name),
+          isBase64,
         },
       });
 
-      if (response.error) throw response.error;
+      // Handle rate limit and credit errors
+      if (response.error) {
+        const errorMessage = response.error.message || "";
+        if (errorMessage.includes("429") || errorMessage.includes("Rate limit")) {
+          toast({
+            title: "Rate limit exceeded",
+            description: "Please wait a moment and try again.",
+            variant: "destructive",
+          });
+          return;
+        }
+        if (errorMessage.includes("402") || errorMessage.includes("credits")) {
+          toast({
+            title: "AI credits exhausted",
+            description: "Please add credits to continue using AI features.",
+            variant: "destructive",
+          });
+          return;
+        }
+        throw response.error;
+      }
 
       const parsed: ParsedItem[] = response.data.items || [];
 
-      // Match parsed items to menu items
+      // Match parsed items to menu items using fuzzy matching
       const matchedItems = parsed.map((item) => {
-        const menuItem = menuItems.find(
-          (m) => m.name.toLowerCase() === item.name.toLowerCase()
-        );
+        const matchResult = findBestMatch(item.name, menuItems);
         return {
           ...item,
-          matched_item_id: menuItem?.id,
-          matched_item_name: menuItem?.name,
+          matched_item_id: matchResult.item?.id,
+          matched_item_name: matchResult.item?.name,
+          match_confidence: matchResult.confidence,
         };
       });
 
       setParsedItems(matchedItems);
+      
+      const matchedCount = matchedItems.filter(i => i.matched_item_id).length;
       toast({
         title: "Parsing complete",
-        description: `Found ${matchedItems.length} items in the report`,
+        description: `Found ${matchedItems.length} items, ${matchedCount} matched to menu`,
       });
     } catch (error) {
       console.error("Parse error:", error);
@@ -122,6 +178,31 @@ const SalesUpload = () => {
     } finally {
       setIsParsing(false);
     }
+  };
+
+  const handleManualMatch = (index: number, menuItemId: string) => {
+    setParsedItems((prev) =>
+      prev.map((item, i) => {
+        if (i !== index) return item;
+        
+        if (menuItemId === "none") {
+          return {
+            ...item,
+            matched_item_id: undefined,
+            matched_item_name: undefined,
+            match_confidence: 'none' as const,
+          };
+        }
+        
+        const menuItem = menuItems.find((m) => m.id === menuItemId);
+        return {
+          ...item,
+          matched_item_id: menuItemId,
+          matched_item_name: menuItem?.name,
+          match_confidence: 'exact' as const, // Manual selection is treated as exact
+        };
+      })
+    );
   };
 
   const handleSaveSalesData = async () => {
@@ -194,6 +275,9 @@ const SalesUpload = () => {
     }
   };
 
+  const matchedCount = parsedItems.filter((i) => i.matched_item_id).length;
+  const unmatchedCount = parsedItems.length - matchedCount;
+
   return (
     <div className="space-y-6">
       {/* Upload Card */}
@@ -264,31 +348,76 @@ const SalesUpload = () => {
       {parsedItems.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle>Parsed Sales Data</CardTitle>
-            <CardDescription>
-              Review the extracted items. Matched items will be saved to your sales data.
-            </CardDescription>
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle>Parsed Sales Data</CardTitle>
+                <CardDescription>
+                  Review and adjust matches. Use the dropdown to manually match unmatched items.
+                </CardDescription>
+              </div>
+              <div className="flex gap-2">
+                <Badge variant="default" className="gap-1">
+                  <Check className="h-3 w-3" />
+                  {matchedCount} matched
+                </Badge>
+                {unmatchedCount > 0 && (
+                  <Badge variant="secondary" className="gap-1">
+                    <X className="h-3 w-3" />
+                    {unmatchedCount} unmatched
+                  </Badge>
+                )}
+              </div>
+            </div>
           </CardHeader>
           <CardContent>
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Item (from file)</TableHead>
-                  <TableHead>Quantity</TableHead>
-                  <TableHead>Matched Menu Item</TableHead>
+                  <TableHead>Item (from report)</TableHead>
+                  <TableHead className="w-24">Qty</TableHead>
+                  <TableHead>Match</TableHead>
+                  <TableHead className="w-64">Menu Item</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {parsedItems.map((item, idx) => (
                   <TableRow key={idx}>
-                    <TableCell>{item.name}</TableCell>
-                    <TableCell>{item.quantity}</TableCell>
                     <TableCell>
-                      {item.matched_item_name ? (
-                        <span className="text-primary">{item.matched_item_name}</span>
-                      ) : (
-                        <span className="text-muted-foreground">Not matched</span>
+                      <span className="font-medium">{item.name}</span>
+                      {item.original_name && item.original_name !== item.name && (
+                        <span className="ml-2 text-xs text-muted-foreground">
+                          (was: {item.original_name})
+                        </span>
                       )}
+                    </TableCell>
+                    <TableCell className="font-mono">{item.quantity}</TableCell>
+                    <TableCell>
+                      <Badge
+                        variant={item.match_confidence === 'none' ? 'outline' : 'secondary'}
+                        className={getConfidenceColor(item.match_confidence || 'none')}
+                      >
+                        {getConfidenceLabel(item.match_confidence || 'none')}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Select
+                        value={item.matched_item_id || "none"}
+                        onValueChange={(value) => handleManualMatch(idx, value)}
+                      >
+                        <SelectTrigger className="w-full">
+                          <SelectValue placeholder="Select menu item..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">
+                            <span className="text-muted-foreground">No match</span>
+                          </SelectItem>
+                          {menuItems.map((menuItem) => (
+                            <SelectItem key={menuItem.id} value={menuItem.id}>
+                              {menuItem.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -296,9 +425,9 @@ const SalesUpload = () => {
             </Table>
 
             <div className="mt-4 flex gap-2">
-              <Button onClick={handleSaveSalesData} disabled={isUploading}>
+              <Button onClick={handleSaveSalesData} disabled={isUploading || matchedCount === 0}>
                 {isUploading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                Save Sales Data
+                Save Sales Data ({matchedCount} items)
               </Button>
               <Button
                 variant="secondary"
