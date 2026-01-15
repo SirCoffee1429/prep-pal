@@ -177,12 +177,30 @@ Return a JSON object with a "menu_items" array containing all parsed items.`;
     const aiResponse = await response.json();
     console.log("AI Response:", JSON.stringify(aiResponse, null, 2));
 
+    // Check for error in AI response (e.g., timeout 524)
+    if (aiResponse.error) {
+      console.error("AI returned error:", aiResponse.error);
+      const errorCode = aiResponse.error.code;
+      
+      if (errorCode === 524) {
+        return new Response(
+          JSON.stringify({ error: "AI request timed out. Try uploading a smaller file or fewer sheets." }),
+          { status: 504, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      
+      return new Response(
+        JSON.stringify({ error: aiResponse.error.message || "AI processing failed" }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
     // Extract the tool call result
     const toolCall = aiResponse.choices?.[0]?.message?.tool_calls?.[0];
     if (!toolCall) {
       console.error("No tool call in response");
       return new Response(
-        JSON.stringify({ error: "AI did not return structured data" }),
+        JSON.stringify({ error: "AI did not return structured data. Please try again." }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
