@@ -728,8 +728,8 @@ const UnifiedImportWizard = ({
                   </Button>
                 </div>
 
-                <ScrollArea className="max-h-[40vh] pr-4">
-                  <Accordion type="multiple" className="space-y-2">
+                <ScrollArea className="h-[50vh] pr-4">
+                  <Accordion type="multiple" className="space-y-2 pb-4">
                     {combinedItems.map((item, index) => (
                       <AccordionItem
                         key={index}
