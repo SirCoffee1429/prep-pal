@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import {
   Dialog,
@@ -39,11 +39,13 @@ import {
   ArrowLeft,
   RefreshCw,
   SkipForward,
+  Settings2,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import type { Database } from "@/integrations/supabase/types";
 
 type KitchenStation = Database["public"]["Enums"]["kitchen_station"];
+type ImportType = "menu_items" | "recipes" | "both";
 
 // Master menu item from financial workbook
 interface MasterMenuItem {
@@ -96,7 +98,6 @@ type DuplicateStatus = "new" | "menu_exists" | "recipe_exists" | "both_exist";
 interface CombinedItem {
   masterItem: MasterMenuItem;
   matchedRecipe: ParsedRecipe | null;
-  stationOverride?: KitchenStation;
   selected: boolean;
   duplicateStatus: DuplicateStatus;
   existingMenuItemId?: string;
@@ -126,15 +127,18 @@ const UnifiedImportWizard = ({
   const masterFileRef = useRef<HTMLInputElement>(null);
   const recipeFilesRef = useRef<HTMLInputElement>(null);
 
-  // Wizard state
+  // Wizard state - now 4 steps with config first
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
 
-  // Step 1: Master workbook
+  // Step 1: Configuration (NEW)
+  const [importType, setImportType] = useState<ImportType>("both");
+  const [selectedStation, setSelectedStation] = useState<KitchenStation | "infer">("infer");
+
+  // Step 2: File uploads
   const [masterItems, setMasterItems] = useState<MasterMenuItem[]>([]);
   const [isParseMasterLoading, setIsParseMasterLoading] = useState(false);
   const [masterFileName, setMasterFileName] = useState("");
 
-  // Step 2: Recipe cards
   const [recipes, setRecipes] = useState<ParsedRecipe[]>([]);
   const [isParseRecipesLoading, setIsParseRecipesLoading] = useState(false);
   const [recipeFileNames, setRecipeFileNames] = useState<string[]>([]);
@@ -148,6 +152,21 @@ const UnifiedImportWizard = ({
 
   // Step 4: Import
   const [isImporting, setIsImporting] = useState(false);
+
+  // Reset wizard state
+  const resetWizard = () => {
+    setStep(1);
+    setImportType("both");
+    setSelectedStation("infer");
+    setMasterItems([]);
+    setRecipes([]);
+    setCombinedItems([]);
+    setMasterFileName("");
+    setRecipeFileNames([]);
+    setExistingMenuItems([]);
+    setExistingRecipes([]);
+    setDuplicateHandling("skip");
+  };
 
   // Extract text from Excel workbook
   const extractTextFromWorkbook = (workbook: XLSX.WorkBook): string => {
@@ -173,13 +192,9 @@ const UnifiedImportWizard = ({
     const n1 = normalize(name1);
     const n2 = normalize(name2);
 
-    // Exact match after normalization
     if (n1 === n2) return true;
-
-    // One contains the other
     if (n1.includes(n2) || n2.includes(n1)) return true;
 
-    // Check word overlap
     const words1 = n1.split(/\s+/).filter((w) => w.length > 2);
     const words2 = n2.split(/\s+/).filter((w) => w.length > 2);
     const overlap = words1.filter((w) => words2.some((w2) => w2.includes(w) || w.includes(w2)));
@@ -208,7 +223,7 @@ const UnifiedImportWizard = ({
     }
   };
 
-  // Step 1: Parse master workbook
+  // Parse master workbook
   const handleMasterFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -254,7 +269,7 @@ const UnifiedImportWizard = ({
     }
   };
 
-  // Step 2: Parse recipe files
+  // Parse recipe files
   const handleRecipeFilesSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
@@ -309,46 +324,84 @@ const UnifiedImportWizard = ({
     }
   };
 
+  // Get the effective station for an item
+  const getEffectiveStation = (inferredStation: string): KitchenStation => {
+    if (selectedStation !== "infer") {
+      return selectedStation;
+    }
+    return (inferredStation as KitchenStation) || "line";
+  };
+
   // Proceed to step 3: match items and check for duplicates
   const proceedToReview = async () => {
-    // Fetch existing data first
     await fetchExistingData();
-    
-    const combined: CombinedItem[] = masterItems.map((master) => {
-      const match = recipes.find((r) => fuzzyMatch(master.name, r.name));
-      
-      // Check for existing menu item
-      const existingMenuItem = existingMenuItems.find((m) => fuzzyMatch(master.name, m.name));
-      
-      // Check for existing recipe (from matched parsed recipe name or master item name)
-      const recipeName = match?.name || master.name;
-      const existingRecipe = existingRecipes.find((r) => fuzzyMatch(recipeName, r.name));
-      
-      // Determine duplicate status
-      let duplicateStatus: DuplicateStatus = "new";
-      if (existingMenuItem && existingRecipe) {
-        duplicateStatus = "both_exist";
-      } else if (existingMenuItem) {
-        duplicateStatus = "menu_exists";
-      } else if (existingRecipe) {
-        duplicateStatus = "recipe_exists";
-      }
 
-      return {
-        masterItem: master,
-        matchedRecipe: match || null,
-        selected: true,
-        duplicateStatus,
-        existingMenuItemId: existingMenuItem?.id,
-        existingRecipeId: existingRecipe?.id,
-      };
-    });
-    
+    let combined: CombinedItem[] = [];
+
+    if (importType === "recipes") {
+      // Only recipes - create combined items from recipes
+      combined = recipes.map((recipe) => {
+        const existingRecipe = existingRecipes.find((r) => fuzzyMatch(recipe.name, r.name));
+        const existingMenuItem = existingMenuItems.find((m) => fuzzyMatch(recipe.name, m.name));
+
+        let duplicateStatus: DuplicateStatus = "new";
+        if (existingMenuItem && existingRecipe) {
+          duplicateStatus = "both_exist";
+        } else if (existingMenuItem) {
+          duplicateStatus = "menu_exists";
+        } else if (existingRecipe) {
+          duplicateStatus = "recipe_exists";
+        }
+
+        return {
+          masterItem: {
+            category: "",
+            name: recipe.name,
+            menu_price: recipe.menu_price || 0,
+            food_cost: recipe.portion_cost || 0,
+            cost_percent: recipe.food_cost_percent || 0,
+            inferred_station: recipe.inferred_station || "line",
+          },
+          matchedRecipe: recipe,
+          selected: true,
+          duplicateStatus,
+          existingMenuItemId: existingMenuItem?.id,
+          existingRecipeId: existingRecipe?.id,
+        };
+      });
+    } else {
+      // Menu items (or both) - use master items
+      combined = masterItems.map((master) => {
+        const match = recipes.find((r) => fuzzyMatch(master.name, r.name));
+        const existingMenuItem = existingMenuItems.find((m) => fuzzyMatch(master.name, m.name));
+        const recipeName = match?.name || master.name;
+        const existingRecipe = existingRecipes.find((r) => fuzzyMatch(recipeName, r.name));
+
+        let duplicateStatus: DuplicateStatus = "new";
+        if (existingMenuItem && existingRecipe) {
+          duplicateStatus = "both_exist";
+        } else if (existingMenuItem) {
+          duplicateStatus = "menu_exists";
+        } else if (existingRecipe) {
+          duplicateStatus = "recipe_exists";
+        }
+
+        return {
+          masterItem: master,
+          matchedRecipe: match || null,
+          selected: true,
+          duplicateStatus,
+          existingMenuItemId: existingMenuItem?.id,
+          existingRecipeId: existingRecipe?.id,
+        };
+      });
+    }
+
     setCombinedItems(combined);
     setStep(3);
   };
 
-  // Step 3: Update selection and station
+  // Step 3: Update selection
   const toggleSelection = (index: number) => {
     setCombinedItems((prev) =>
       prev.map((item, i) => (i === index ? { ...item, selected: !item.selected } : item))
@@ -358,16 +411,6 @@ const UnifiedImportWizard = ({
   const toggleAll = () => {
     const allSelected = combinedItems.every((item) => item.selected);
     setCombinedItems((prev) => prev.map((item) => ({ ...item, selected: !allSelected })));
-  };
-
-  const setStation = (index: number, station: KitchenStation) => {
-    setCombinedItems((prev) =>
-      prev.map((item, i) => (i === index ? { ...item, stationOverride: station } : item))
-    );
-  };
-
-  const getStation = (item: CombinedItem): KitchenStation => {
-    return item.stationOverride || (item.masterItem.inferred_station as KitchenStation) || "line";
   };
 
   // Step 4: Import with duplicate handling
@@ -389,7 +432,7 @@ const UnifiedImportWizard = ({
         // Handle menu item duplicates
         if (isDuplicateMenuItem && duplicateHandling === "skip") {
           skippedItems++;
-          continue; // Skip this item entirely
+          continue;
         }
 
         let recipeId: string | null = null;
@@ -398,7 +441,6 @@ const UnifiedImportWizard = ({
         if (item.matchedRecipe) {
           if (isDuplicateRecipe && item.existingRecipeId) {
             if (duplicateHandling === "update") {
-              // Update existing recipe
               const { error: recipeError } = await supabase
                 .from("recipes")
                 .update({
@@ -418,11 +460,9 @@ const UnifiedImportWizard = ({
                 recipeId = item.existingRecipeId;
               }
             } else {
-              // Skip mode - use existing recipe
               recipeId = item.existingRecipeId;
             }
           } else {
-            // Create new recipe
             const recipePayload = {
               name: item.matchedRecipe.name,
               ingredients: item.matchedRecipe.ingredients as unknown as Database["public"]["Tables"]["recipes"]["Insert"]["ingredients"],
@@ -447,44 +487,42 @@ const UnifiedImportWizard = ({
             }
           }
         } else if (item.existingRecipeId) {
-          // No parsed recipe but existing recipe found - link to it
           recipeId = item.existingRecipeId;
         }
 
-        // Handle menu item
-        if (isDuplicateMenuItem && item.existingMenuItemId && duplicateHandling === "update") {
-          // Update existing menu item
-          const { error: menuError } = await supabase
-            .from("menu_items")
-            .update({
-              station: getStation(item),
+        // Handle menu item (skip if recipes-only import)
+        if (importType !== "recipes") {
+          if (isDuplicateMenuItem && item.existingMenuItemId && duplicateHandling === "update") {
+            const { error: menuError } = await supabase
+              .from("menu_items")
+              .update({
+                station: getEffectiveStation(item.masterItem.inferred_station),
+                recipe_id: recipeId,
+              })
+              .eq("id", item.existingMenuItemId);
+
+            if (menuError) {
+              console.error("Error updating menu item:", menuError);
+            } else {
+              updatedMenuItems++;
+            }
+          } else if (!isDuplicateMenuItem) {
+            const { error: menuError } = await supabase.from("menu_items").insert({
+              name: item.masterItem.name,
+              station: getEffectiveStation(item.masterItem.inferred_station),
+              unit: "portions",
               recipe_id: recipeId,
-            })
-            .eq("id", item.existingMenuItemId);
+            });
 
-          if (menuError) {
-            console.error("Error updating menu item:", menuError);
-          } else {
-            updatedMenuItems++;
-          }
-        } else if (!isDuplicateMenuItem) {
-          // Create new menu item
-          const { error: menuError } = await supabase.from("menu_items").insert({
-            name: item.masterItem.name,
-            station: getStation(item),
-            unit: "portions",
-            recipe_id: recipeId,
-          });
-
-          if (menuError) {
-            console.error("Error creating menu item:", menuError);
-          } else {
-            createdMenuItems++;
+            if (menuError) {
+              console.error("Error creating menu item:", menuError);
+            } else {
+              createdMenuItems++;
+            }
           }
         }
       }
 
-      // Build summary message
       const summaryParts: string[] = [];
       if (createdMenuItems > 0) summaryParts.push(`Created ${createdMenuItems} menu items`);
       if (createdRecipes > 0) summaryParts.push(`${createdRecipes} recipes`);
@@ -501,16 +539,7 @@ const UnifiedImportWizard = ({
       setTimeout(() => {
         onComplete();
         onOpenChange(false);
-        // Reset state
-        setStep(1);
-        setMasterItems([]);
-        setRecipes([]);
-        setCombinedItems([]);
-        setMasterFileName("");
-        setRecipeFileNames([]);
-        setExistingMenuItems([]);
-        setExistingRecipes([]);
-        setDuplicateHandling("skip");
+        resetWizard();
       }, 1500);
     } catch (error) {
       console.error("Import error:", error);
@@ -531,14 +560,9 @@ const UnifiedImportWizard = ({
 
   const selectedCount = combinedItems.filter((item) => item.selected).length;
   const matchedCount = combinedItems.filter((item) => item.matchedRecipe).length;
-  const duplicateCount = combinedItems.filter(
-    (item) => item.duplicateStatus !== "new"
-  ).length;
-  const newItemsCount = combinedItems.filter(
-    (item) => item.selected && item.duplicateStatus === "new"
-  ).length;
+  const duplicateCount = combinedItems.filter((item) => item.duplicateStatus !== "new").length;
+  const newItemsCount = combinedItems.filter((item) => item.selected && item.duplicateStatus === "new").length;
 
-  // Get duplicate status badge
   const getDuplicateStatusBadge = (status: DuplicateStatus) => {
     switch (status) {
       case "new":
@@ -568,6 +592,31 @@ const UnifiedImportWizard = ({
     }
   };
 
+  // Check if we can proceed from step 2
+  const canProceedFromStep2 = () => {
+    if (importType === "menu_items") return masterItems.length > 0;
+    if (importType === "recipes") return recipes.length > 0;
+    return masterItems.length > 0; // "both" requires master items, recipes are optional
+  };
+
+  // Get import type label
+  const getImportTypeLabel = () => {
+    switch (importType) {
+      case "menu_items":
+        return "Menu Items Only";
+      case "recipes":
+        return "Recipes Only";
+      case "both":
+        return "Menu Items + Recipes";
+    }
+  };
+
+  // Get station label
+  const getStationLabel = () => {
+    if (selectedStation === "infer") return "AI Infer";
+    return STATIONS.find((s) => s.value === selectedStation)?.label || selectedStation;
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[90vh] sm:max-w-4xl">
@@ -581,97 +630,199 @@ const UnifiedImportWizard = ({
           </DialogTitle>
         </DialogHeader>
 
-        {/* Step 1: Master Workbook */}
+        {/* Step 1: Configure Import (NEW) */}
         {step === 1 && (
           <div className="space-y-6 py-4">
             <div className="text-center space-y-2">
-              <FileSpreadsheet className="h-16 w-16 mx-auto text-muted-foreground" />
-              <h3 className="text-lg font-semibold">Upload Master Food Cost Workbook</h3>
+              <Settings2 className="h-16 w-16 mx-auto text-muted-foreground" />
+              <h3 className="text-lg font-semibold">Configure Import</h3>
               <p className="text-sm text-muted-foreground max-w-md mx-auto">
-                Upload your master spreadsheet containing menu items, prices, and food cost data.
-                This will be the source of truth for financial data.
+                Select what you're importing and which station these items belong to.
               </p>
             </div>
 
-            <input
-              ref={masterFileRef}
-              type="file"
-              accept=".xlsx,.xls"
-              onChange={handleMasterFileSelect}
-              className="hidden"
-            />
+            <div className="space-y-6 max-w-md mx-auto">
+              {/* Import Type Selection */}
+              <div className="space-y-3">
+                <Label className="text-base font-medium">What are you importing?</Label>
+                <RadioGroup
+                  value={importType}
+                  onValueChange={(v) => setImportType(v as ImportType)}
+                  className="space-y-3"
+                >
+                  <div className="flex items-start space-x-3 p-3 rounded-lg border hover:bg-muted/50 transition-colors">
+                    <RadioGroupItem value="menu_items" id="menu_items" className="mt-1" />
+                    <Label htmlFor="menu_items" className="flex-1 cursor-pointer">
+                      <div className="font-medium">Menu Items Only</div>
+                      <div className="text-sm text-muted-foreground">
+                        Financial data, prices, food costs from master workbook
+                      </div>
+                    </Label>
+                  </div>
+                  <div className="flex items-start space-x-3 p-3 rounded-lg border hover:bg-muted/50 transition-colors">
+                    <RadioGroupItem value="recipes" id="recipes" className="mt-1" />
+                    <Label htmlFor="recipes" className="flex-1 cursor-pointer">
+                      <div className="font-medium">Recipes Only</div>
+                      <div className="text-sm text-muted-foreground">
+                        Ingredients, methods, prep instructions from recipe cards
+                      </div>
+                    </Label>
+                  </div>
+                  <div className="flex items-start space-x-3 p-3 rounded-lg border hover:bg-muted/50 transition-colors">
+                    <RadioGroupItem value="both" id="both" className="mt-1" />
+                    <Label htmlFor="both" className="flex-1 cursor-pointer">
+                      <div className="font-medium">Menu Items + Recipes</div>
+                      <div className="text-sm text-muted-foreground">
+                        Full import with linked recipes and financial data
+                      </div>
+                    </Label>
+                  </div>
+                </RadioGroup>
+              </div>
 
-            <div className="flex flex-col items-center gap-4">
-              <Button
-                size="lg"
-                onClick={() => masterFileRef.current?.click()}
-                disabled={isParseMasterLoading}
-              >
-                {isParseMasterLoading ? (
-                  <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                ) : (
-                  <Upload className="mr-2 h-5 w-5" />
-                )}
-                Select Master Workbook
-              </Button>
-
-              {masterItems.length > 0 && (
-                <div className="flex items-center gap-2 text-primary">
-                  <CheckCircle2 className="h-5 w-5" />
-                  <span className="font-medium">
-                    {masterFileName}: {masterItems.length} items found
-                  </span>
-                </div>
-              )}
+              {/* Station Selection */}
+              <div className="space-y-3">
+                <Label className="text-base font-medium">Which station do these items belong to?</Label>
+                <Select
+                  value={selectedStation}
+                  onValueChange={(v) => setSelectedStation(v as KitchenStation | "infer")}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Select station" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="infer">
+                      <div className="flex items-center gap-2">
+                        <span>🤖</span>
+                        <span>All Stations (AI Infer)</span>
+                      </div>
+                    </SelectItem>
+                    {STATIONS.map((station) => (
+                      <SelectItem key={station.value} value={station.value}>
+                        {station.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  {selectedStation === "infer"
+                    ? "AI will automatically assign stations based on item categories"
+                    : `All imported items will be assigned to ${getStationLabel()}`}
+                </p>
+              </div>
             </div>
           </div>
         )}
 
-        {/* Step 2: Recipe Cards */}
+        {/* Step 2: Upload Files */}
         {step === 2 && (
           <div className="space-y-6 py-4">
-            <div className="text-center space-y-2">
-              <ChefHat className="h-16 w-16 mx-auto text-muted-foreground" />
-              <h3 className="text-lg font-semibold">Upload Recipe Cards (Optional)</h3>
-              <p className="text-sm text-muted-foreground max-w-md mx-auto">
-                Upload your individual recipe card Excel files. These will be matched to menu items
-                to add ingredients and preparation methods.
-              </p>
+            {/* Config Summary */}
+            <div className="flex items-center justify-center gap-4 text-sm bg-muted/50 rounded-lg p-3">
+              <Badge variant="secondary">{getImportTypeLabel()}</Badge>
+              <Badge variant="outline">Station: {getStationLabel()}</Badge>
             </div>
 
-            <input
-              ref={recipeFilesRef}
-              type="file"
-              accept=".xlsx,.xls"
-              multiple
-              onChange={handleRecipeFilesSelect}
-              className="hidden"
-            />
-
-            <div className="flex flex-col items-center gap-4">
-              <Button
-                size="lg"
-                variant="outline"
-                onClick={() => recipeFilesRef.current?.click()}
-                disabled={isParseRecipesLoading}
-              >
-                {isParseRecipesLoading ? (
-                  <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                ) : (
-                  <Upload className="mr-2 h-5 w-5" />
-                )}
-                Select Recipe Files
-              </Button>
-
-              {recipes.length > 0 && (
-                <div className="flex items-center gap-2 text-primary">
-                  <CheckCircle2 className="h-5 w-5" />
-                  <span className="font-medium">
-                    {recipes.length} recipes parsed from {recipeFileNames.length} files
-                  </span>
+            {/* Master Workbook Upload (for menu_items or both) */}
+            {(importType === "menu_items" || importType === "both") && (
+              <div className="space-y-4">
+                <div className="text-center space-y-2">
+                  <FileSpreadsheet className="h-12 w-12 mx-auto text-muted-foreground" />
+                  <h3 className="text-lg font-semibold">Upload Master Food Cost Workbook</h3>
+                  <p className="text-sm text-muted-foreground max-w-md mx-auto">
+                    Upload your master spreadsheet containing menu items, prices, and food cost data.
+                  </p>
                 </div>
-              )}
-            </div>
+
+                <input
+                  ref={masterFileRef}
+                  type="file"
+                  accept=".xlsx,.xls"
+                  onChange={handleMasterFileSelect}
+                  className="hidden"
+                />
+
+                <div className="flex flex-col items-center gap-3">
+                  <Button
+                    size="lg"
+                    variant={masterItems.length > 0 ? "outline" : "default"}
+                    onClick={() => masterFileRef.current?.click()}
+                    disabled={isParseMasterLoading}
+                  >
+                    {isParseMasterLoading ? (
+                      <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                    ) : (
+                      <Upload className="mr-2 h-5 w-5" />
+                    )}
+                    {masterItems.length > 0 ? "Replace Master Workbook" : "Select Master Workbook"}
+                  </Button>
+
+                  {masterItems.length > 0 && (
+                    <div className="flex items-center gap-2 text-primary">
+                      <CheckCircle2 className="h-5 w-5" />
+                      <span className="font-medium">
+                        {masterFileName}: {masterItems.length} items found
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Separator */}
+            {importType === "both" && masterItems.length > 0 && (
+              <div className="border-t my-6" />
+            )}
+
+            {/* Recipe Cards Upload (for recipes or both) */}
+            {(importType === "recipes" || (importType === "both" && masterItems.length > 0)) && (
+              <div className="space-y-4">
+                <div className="text-center space-y-2">
+                  <ChefHat className="h-12 w-12 mx-auto text-muted-foreground" />
+                  <h3 className="text-lg font-semibold">
+                    Upload Recipe Cards {importType === "both" && "(Optional)"}
+                  </h3>
+                  <p className="text-sm text-muted-foreground max-w-md mx-auto">
+                    Upload your individual recipe card Excel files.
+                    {importType === "both" && " These will be matched to menu items automatically."}
+                  </p>
+                </div>
+
+                <input
+                  ref={recipeFilesRef}
+                  type="file"
+                  accept=".xlsx,.xls"
+                  multiple
+                  onChange={handleRecipeFilesSelect}
+                  className="hidden"
+                />
+
+                <div className="flex flex-col items-center gap-3">
+                  <Button
+                    size="lg"
+                    variant={recipes.length > 0 ? "outline" : importType === "recipes" ? "default" : "outline"}
+                    onClick={() => recipeFilesRef.current?.click()}
+                    disabled={isParseRecipesLoading}
+                  >
+                    {isParseRecipesLoading ? (
+                      <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                    ) : (
+                      <Upload className="mr-2 h-5 w-5" />
+                    )}
+                    {recipes.length > 0 ? "Add More Recipe Files" : "Select Recipe Files"}
+                  </Button>
+
+                  {recipes.length > 0 && (
+                    <div className="flex items-center gap-2 text-primary">
+                      <CheckCircle2 className="h-5 w-5" />
+                      <span className="font-medium">
+                        {recipes.length} recipes parsed from {recipeFileNames.length} files
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -685,6 +836,12 @@ const UnifiedImportWizard = ({
               </div>
             ) : (
               <>
+                {/* Config Summary */}
+                <div className="flex items-center gap-4 text-sm bg-muted/50 rounded-lg p-3">
+                  <Badge variant="secondary">{getImportTypeLabel()}</Badge>
+                  <Badge variant="outline">Station: {getStationLabel()}</Badge>
+                </div>
+
                 {/* Duplicate handling controls */}
                 {duplicateCount > 0 && (
                   <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-4 space-y-3">
@@ -720,7 +877,7 @@ const UnifiedImportWizard = ({
                 <div className="flex items-center justify-between border-b pb-2">
                   <div className="space-y-1">
                     <span className="text-sm text-muted-foreground">
-                      {masterItems.length} menu items • {matchedCount} with recipes • {newItemsCount} new
+                      {combinedItems.length} items • {matchedCount} with recipes • {newItemsCount} new
                     </span>
                   </div>
                   <Button variant="ghost" size="sm" onClick={toggleAll}>
@@ -745,9 +902,11 @@ const UnifiedImportWizard = ({
                           <AccordionTrigger className="flex-1 hover:no-underline">
                             <div className="flex items-center gap-2 text-left flex-1 flex-wrap">
                               <span className="font-medium">{item.masterItem.name}</span>
-                              <Badge variant="secondary" className="text-xs">
-                                {item.masterItem.category}
-                              </Badge>
+                              {item.masterItem.category && (
+                                <Badge variant="secondary" className="text-xs">
+                                  {item.masterItem.category}
+                                </Badge>
+                              )}
                               {getDuplicateStatusBadge(item.duplicateStatus)}
                               {item.matchedRecipe ? (
                                 <Badge variant="default" className="text-xs">
@@ -762,23 +921,10 @@ const UnifiedImportWizard = ({
                               )}
                             </div>
                           </AccordionTrigger>
-                          <div onClick={(e) => e.stopPropagation()}>
-                            <Select
-                              value={getStation(item)}
-                              onValueChange={(v) => setStation(index, v as KitchenStation)}
-                            >
-                              <SelectTrigger className="w-28 h-8">
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {STATIONS.map((s) => (
-                                  <SelectItem key={s.value} value={s.value}>
-                                    {s.label}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          </div>
+                          {/* Show station badge (read-only since it's pre-selected) */}
+                          <Badge variant="outline" className="text-xs capitalize">
+                            {getEffectiveStation(item.masterItem.inferred_station)}
+                          </Badge>
                         </div>
 
                         <AccordionContent className="pb-4">
@@ -796,21 +942,25 @@ const UnifiedImportWizard = ({
                             )}
 
                             {/* Financial Data */}
-                            <div className="flex flex-wrap gap-4 text-sm">
-                              <div className="flex items-center gap-1">
-                                <DollarSign className="h-3.5 w-3.5 text-muted-foreground" />
-                                <span>Price: {formatCurrency(item.masterItem.menu_price)}</span>
+                            {(item.masterItem.menu_price > 0 || item.masterItem.food_cost > 0) && (
+                              <div className="flex flex-wrap gap-4 text-sm">
+                                <div className="flex items-center gap-1">
+                                  <DollarSign className="h-3.5 w-3.5 text-muted-foreground" />
+                                  <span>Price: {formatCurrency(item.masterItem.menu_price)}</span>
+                                </div>
+                                <div className="flex items-center gap-1">
+                                  <span className="text-muted-foreground">Cost:</span>
+                                  <span>{formatCurrency(item.masterItem.food_cost)}</span>
+                                </div>
+                                {item.masterItem.cost_percent > 0 && (
+                                  <Badge
+                                    variant={item.masterItem.cost_percent <= 35 ? "default" : "secondary"}
+                                  >
+                                    {item.masterItem.cost_percent.toFixed(1)}% food cost
+                                  </Badge>
+                                )}
                               </div>
-                              <div className="flex items-center gap-1">
-                                <span className="text-muted-foreground">Cost:</span>
-                                <span>{formatCurrency(item.masterItem.food_cost)}</span>
-                              </div>
-                              <Badge
-                                variant={item.masterItem.cost_percent <= 35 ? "default" : "secondary"}
-                              >
-                                {item.masterItem.cost_percent.toFixed(1)}% food cost
-                              </Badge>
-                            </div>
+                            )}
 
                             {/* Matched Recipe Info */}
                             {item.matchedRecipe && (
@@ -853,7 +1003,9 @@ const UnifiedImportWizard = ({
 
                             {!item.matchedRecipe && (
                               <p className="text-sm text-muted-foreground italic">
-                                No recipe card matched. Menu item will be created without recipe data.
+                                {importType === "recipes"
+                                  ? "Recipe data will be imported."
+                                  : "No recipe card matched. Menu item will be created without recipe data."}
                               </p>
                             )}
                           </div>
@@ -880,8 +1032,8 @@ const UnifiedImportWizard = ({
 
         <DialogFooter className="gap-2 sm:gap-0">
           {step === 1 && (
-            <Button onClick={() => setStep(2)} disabled={masterItems.length === 0}>
-              Next: Recipe Cards
+            <Button onClick={() => setStep(2)}>
+              Next: Upload Files
               <ArrowRight className="ml-2 h-4 w-4" />
             </Button>
           )}
@@ -892,7 +1044,7 @@ const UnifiedImportWizard = ({
                 <ArrowLeft className="mr-2 h-4 w-4" />
                 Back
               </Button>
-              <Button onClick={proceedToReview}>
+              <Button onClick={proceedToReview} disabled={!canProceedFromStep2()}>
                 Review & Match
                 <ArrowRight className="ml-2 h-4 w-4" />
               </Button>
@@ -905,8 +1057,15 @@ const UnifiedImportWizard = ({
                 <ArrowLeft className="mr-2 h-4 w-4" />
                 Back
               </Button>
-              <Button onClick={handleImport} disabled={selectedCount === 0 || isImporting || isLoadingExisting}>
-                {isImporting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              <Button
+                onClick={handleImport}
+                disabled={isImporting || selectedCount === 0}
+              >
+                {isImporting ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <CheckCircle2 className="mr-2 h-4 w-4" />
+                )}
                 Import {selectedCount} Items
               </Button>
             </>
