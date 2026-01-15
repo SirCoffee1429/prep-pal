@@ -94,6 +94,9 @@ interface ExistingRecipe {
 // Duplicate status for an item
 type DuplicateStatus = "new" | "menu_exists" | "recipe_exists" | "both_exist";
 
+// Per-item import type
+type ItemImportType = "menu_item" | "recipe" | "both";
+
 // Combined item for review
 interface CombinedItem {
   masterItem: MasterMenuItem;
@@ -102,6 +105,9 @@ interface CombinedItem {
   duplicateStatus: DuplicateStatus;
   existingMenuItemId?: string;
   existingRecipeId?: string;
+  // Per-item overrides
+  itemImportType: ItemImportType;
+  itemStation: KitchenStation;
 }
 
 interface UnifiedImportWizardProps {
@@ -332,11 +338,19 @@ const UnifiedImportWizard = ({
     return (inferredStation as KitchenStation) || "line";
   };
 
+  // Map global import type to per-item import type default
+  const getDefaultItemImportType = (): ItemImportType => {
+    if (importType === "menu_items") return "menu_item";
+    if (importType === "recipes") return "recipe";
+    return "both";
+  };
+
   // Proceed to step 3: match items and check for duplicates
   const proceedToReview = async () => {
     await fetchExistingData();
 
     let combined: CombinedItem[] = [];
+    const defaultItemType = getDefaultItemImportType();
 
     if (importType === "recipes") {
       // Only recipes - create combined items from recipes
@@ -353,6 +367,8 @@ const UnifiedImportWizard = ({
           duplicateStatus = "recipe_exists";
         }
 
+        const effectiveStation = getEffectiveStation(recipe.inferred_station || "line");
+
         return {
           masterItem: {
             category: "",
@@ -367,6 +383,8 @@ const UnifiedImportWizard = ({
           duplicateStatus,
           existingMenuItemId: existingMenuItem?.id,
           existingRecipeId: existingRecipe?.id,
+          itemImportType: defaultItemType,
+          itemStation: effectiveStation,
         };
       });
     } else {
@@ -386,6 +404,8 @@ const UnifiedImportWizard = ({
           duplicateStatus = "recipe_exists";
         }
 
+        const effectiveStation = getEffectiveStation(master.inferred_station);
+
         return {
           masterItem: master,
           matchedRecipe: match || null,
@@ -393,6 +413,8 @@ const UnifiedImportWizard = ({
           duplicateStatus,
           existingMenuItemId: existingMenuItem?.id,
           existingRecipeId: existingRecipe?.id,
+          itemImportType: defaultItemType,
+          itemStation: effectiveStation,
         };
       });
     }
@@ -413,6 +435,20 @@ const UnifiedImportWizard = ({
     setCombinedItems((prev) => prev.map((item) => ({ ...item, selected: !allSelected })));
   };
 
+  // Update per-item import type
+  const updateItemImportType = (index: number, value: ItemImportType) => {
+    setCombinedItems((prev) =>
+      prev.map((item, i) => (i === index ? { ...item, itemImportType: value } : item))
+    );
+  };
+
+  // Update per-item station
+  const updateItemStation = (index: number, value: KitchenStation) => {
+    setCombinedItems((prev) =>
+      prev.map((item, i) => (i === index ? { ...item, itemStation: value } : item))
+    );
+  };
+
   // Step 4: Import with duplicate handling
   const handleImport = async () => {
     setIsImporting(true);
@@ -428,17 +464,21 @@ const UnifiedImportWizard = ({
       for (const item of selectedItems) {
         const isDuplicateMenuItem = item.duplicateStatus === "menu_exists" || item.duplicateStatus === "both_exist";
         const isDuplicateRecipe = item.duplicateStatus === "recipe_exists" || item.duplicateStatus === "both_exist";
+        
+        // Check per-item import type settings
+        const shouldImportRecipe = item.itemImportType === "recipe" || item.itemImportType === "both";
+        const shouldImportMenuItem = item.itemImportType === "menu_item" || item.itemImportType === "both";
 
-        // Handle menu item duplicates
-        if (isDuplicateMenuItem && duplicateHandling === "skip") {
+        // Handle menu item duplicates - only skip if importing menu items and duplicate exists
+        if (shouldImportMenuItem && isDuplicateMenuItem && duplicateHandling === "skip") {
           skippedItems++;
           continue;
         }
 
         let recipeId: string | null = null;
 
-        // Handle recipe
-        if (item.matchedRecipe) {
+        // Handle recipe (only if per-item setting includes recipes)
+        if (shouldImportRecipe && item.matchedRecipe) {
           if (isDuplicateRecipe && item.existingRecipeId) {
             if (duplicateHandling === "update") {
               const { error: recipeError } = await supabase
@@ -462,7 +502,7 @@ const UnifiedImportWizard = ({
             } else {
               recipeId = item.existingRecipeId;
             }
-          } else {
+          } else if (!isDuplicateRecipe) {
             const recipePayload = {
               name: item.matchedRecipe.name,
               ingredients: item.matchedRecipe.ingredients as unknown as Database["public"]["Tables"]["recipes"]["Insert"]["ingredients"],
@@ -490,13 +530,13 @@ const UnifiedImportWizard = ({
           recipeId = item.existingRecipeId;
         }
 
-        // Handle menu item (skip if recipes-only import)
-        if (importType !== "recipes") {
+        // Handle menu item (only if per-item setting includes menu items)
+        if (shouldImportMenuItem) {
           if (isDuplicateMenuItem && item.existingMenuItemId && duplicateHandling === "update") {
             const { error: menuError } = await supabase
               .from("menu_items")
               .update({
-                station: getEffectiveStation(item.masterItem.inferred_station),
+                station: item.itemStation,
                 recipe_id: recipeId,
               })
               .eq("id", item.existingMenuItemId);
@@ -509,7 +549,7 @@ const UnifiedImportWizard = ({
           } else if (!isDuplicateMenuItem) {
             const { error: menuError } = await supabase.from("menu_items").insert({
               name: item.masterItem.name,
-              station: getEffectiveStation(item.masterItem.inferred_station),
+              station: item.itemStation,
               unit: "portions",
               recipe_id: recipeId,
             });
@@ -921,10 +961,44 @@ const UnifiedImportWizard = ({
                               )}
                             </div>
                           </AccordionTrigger>
-                          {/* Show station badge (read-only since it's pre-selected) */}
-                          <Badge variant="outline" className="text-xs capitalize">
-                            {getEffectiveStation(item.masterItem.inferred_station)}
-                          </Badge>
+                          
+                          {/* Per-item Import Type Dropdown */}
+                          <Select
+                            value={item.itemImportType}
+                            onValueChange={(value: ItemImportType) => updateItemImportType(index, value)}
+                          >
+                            <SelectTrigger 
+                              className="w-[130px] h-8 text-xs"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="menu_item">Menu Item</SelectItem>
+                              <SelectItem value="recipe">Recipe</SelectItem>
+                              <SelectItem value="both">Both</SelectItem>
+                            </SelectContent>
+                          </Select>
+
+                          {/* Per-item Station Dropdown */}
+                          <Select
+                            value={item.itemStation}
+                            onValueChange={(value: KitchenStation) => updateItemStation(index, value)}
+                          >
+                            <SelectTrigger 
+                              className="w-[100px] h-8 text-xs capitalize"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {STATIONS.map((station) => (
+                                <SelectItem key={station.value} value={station.value}>
+                                  {station.label}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
                         </div>
 
                         <AccordionContent className="pb-4">
