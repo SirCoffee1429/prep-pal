@@ -27,10 +27,11 @@ import {
 } from "@/components/ui/dialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Pencil, Trash2, Loader2, Upload } from "lucide-react";
+import { Plus, Pencil, Trash2, Loader2, Upload, FileStack } from "lucide-react";
 import * as XLSX from "xlsx";
 import type { Database } from "@/integrations/supabase/types";
 import MenuItemImportPreview, { ParsedMenuItem } from "./MenuItemImportPreview";
+import UnifiedImportWizard from "./UnifiedImportWizard";
 
 type KitchenStation = Database["public"]["Enums"]["kitchen_station"];
 
@@ -71,6 +72,7 @@ const MenuItemManagement = () => {
   const [parsedMenuItems, setParsedMenuItems] = useState<ParsedMenuItem[]>([]);
   const [isImportPreviewOpen, setIsImportPreviewOpen] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
+  const [isUnifiedWizardOpen, setIsUnifiedWizardOpen] = useState(false);
 
   // Form state
   const [name, setName] = useState("");
@@ -395,6 +397,13 @@ const MenuItemManagement = () => {
             />
             <Button
               variant="outline"
+              onClick={() => setIsUnifiedWizardOpen(true)}
+            >
+              <FileStack className="mr-2 h-4 w-4" />
+              Unified Import
+            </Button>
+            <Button
+              variant="outline"
               onClick={() => fileInputRef.current?.click()}
               disabled={isParsing}
             >
@@ -544,6 +553,12 @@ const MenuItemManagement = () => {
         existingRecipes={recipes}
         onImport={handleImport}
         isImporting={isImporting}
+      />
+
+      <UnifiedImportWizard
+        open={isUnifiedWizardOpen}
+        onOpenChange={setIsUnifiedWizardOpen}
+        onComplete={fetchData}
       />
     </>
   );

@@ -11,3 +11,6 @@ verify_jwt = false
 
 [functions.parse-menu-items]
 verify_jwt = false
+
+[functions.parse-master-menu]
+verify_jwt = false
