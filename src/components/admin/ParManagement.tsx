@@ -19,8 +19,9 @@ import {
 } from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, Save } from "lucide-react";
+import { Loader2, Save, Upload } from "lucide-react";
 import type { Database } from "@/integrations/supabase/types";
+import ParSheetImportDialog from "./ParSheetImportDialog";
 
 type KitchenStation = Database["public"]["Enums"]["kitchen_station"];
 
@@ -64,6 +65,7 @@ const ParManagement = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [changes, setChanges] = useState<Map<string, number>>(new Map());
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
 
   useEffect(() => {
     fetchData();
@@ -213,18 +215,26 @@ const ParManagement = () => {
               </SelectContent>
             </Select>
           </div>
-          <Button
-            onClick={handleSave}
-            disabled={isSaving || changes.size === 0}
-            className="ml-auto"
-          >
-            {isSaving ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : (
-              <Save className="mr-2 h-4 w-4" />
-            )}
-            Save Changes
-          </Button>
+          <div className="flex gap-2 ml-auto">
+            <Button
+              variant="outline"
+              onClick={() => setImportDialogOpen(true)}
+            >
+              <Upload className="mr-2 h-4 w-4" />
+              Import Par Sheet
+            </Button>
+            <Button
+              onClick={handleSave}
+              disabled={isSaving || changes.size === 0}
+            >
+              {isSaving ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Save className="mr-2 h-4 w-4" />
+              )}
+              Save Changes
+            </Button>
+          </div>
         </div>
 
         {/* Table */}
@@ -265,6 +275,13 @@ const ParManagement = () => {
           </TableBody>
         </Table>
       </CardContent>
+
+      <ParSheetImportDialog
+        open={importDialogOpen}
+        onOpenChange={setImportDialogOpen}
+        selectedDay={selectedDay}
+        onImportComplete={fetchData}
+      />
     </Card>
   );
 };

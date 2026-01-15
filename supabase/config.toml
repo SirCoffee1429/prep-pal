@@ -14,3 +14,6 @@ verify_jwt = false
 
 [functions.parse-master-menu]
 verify_jwt = false
+
+[functions.parse-par-sheet]
+verify_jwt = false
