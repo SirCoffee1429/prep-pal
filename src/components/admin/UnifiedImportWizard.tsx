@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import {
   Dialog,
@@ -24,6 +24,8 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import {
   Loader2,
@@ -35,6 +37,8 @@ import {
   AlertCircle,
   ArrowRight,
   ArrowLeft,
+  RefreshCw,
+  SkipForward,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import type { Database } from "@/integrations/supabase/types";
@@ -72,12 +76,31 @@ interface ParsedRecipe {
   fileName: string;
 }
 
+// Existing database records
+interface ExistingMenuItem {
+  id: string;
+  name: string;
+  station: KitchenStation;
+  recipe_id: string | null;
+}
+
+interface ExistingRecipe {
+  id: string;
+  name: string;
+}
+
+// Duplicate status for an item
+type DuplicateStatus = "new" | "menu_exists" | "recipe_exists" | "both_exist";
+
 // Combined item for review
 interface CombinedItem {
   masterItem: MasterMenuItem;
   matchedRecipe: ParsedRecipe | null;
   stationOverride?: KitchenStation;
   selected: boolean;
+  duplicateStatus: DuplicateStatus;
+  existingMenuItemId?: string;
+  existingRecipeId?: string;
 }
 
 interface UnifiedImportWizardProps {
@@ -118,6 +141,10 @@ const UnifiedImportWizard = ({
 
   // Step 3: Combined items for review
   const [combinedItems, setCombinedItems] = useState<CombinedItem[]>([]);
+  const [existingMenuItems, setExistingMenuItems] = useState<ExistingMenuItem[]>([]);
+  const [existingRecipes, setExistingRecipes] = useState<ExistingRecipe[]>([]);
+  const [duplicateHandling, setDuplicateHandling] = useState<"skip" | "update">("skip");
+  const [isLoadingExisting, setIsLoadingExisting] = useState(false);
 
   // Step 4: Import
   const [isImporting, setIsImporting] = useState(false);
@@ -157,6 +184,28 @@ const UnifiedImportWizard = ({
     const words2 = n2.split(/\s+/).filter((w) => w.length > 2);
     const overlap = words1.filter((w) => words2.some((w2) => w2.includes(w) || w.includes(w2)));
     return overlap.length >= 1 && overlap.length >= Math.min(words1.length, words2.length) * 0.5;
+  };
+
+  // Fetch existing data from database
+  const fetchExistingData = async () => {
+    setIsLoadingExisting(true);
+    try {
+      const [menuItemsRes, recipesRes] = await Promise.all([
+        supabase.from("menu_items").select("id, name, station, recipe_id"),
+        supabase.from("recipes").select("id, name"),
+      ]);
+
+      if (menuItemsRes.data) {
+        setExistingMenuItems(menuItemsRes.data as ExistingMenuItem[]);
+      }
+      if (recipesRes.data) {
+        setExistingRecipes(recipesRes.data as ExistingRecipe[]);
+      }
+    } catch (error) {
+      console.error("Error fetching existing data:", error);
+    } finally {
+      setIsLoadingExisting(false);
+    }
   };
 
   // Step 1: Parse master workbook
@@ -260,16 +309,41 @@ const UnifiedImportWizard = ({
     }
   };
 
-  // Proceed to step 3: match items
-  const proceedToReview = () => {
+  // Proceed to step 3: match items and check for duplicates
+  const proceedToReview = async () => {
+    // Fetch existing data first
+    await fetchExistingData();
+    
     const combined: CombinedItem[] = masterItems.map((master) => {
       const match = recipes.find((r) => fuzzyMatch(master.name, r.name));
+      
+      // Check for existing menu item
+      const existingMenuItem = existingMenuItems.find((m) => fuzzyMatch(master.name, m.name));
+      
+      // Check for existing recipe (from matched parsed recipe name or master item name)
+      const recipeName = match?.name || master.name;
+      const existingRecipe = existingRecipes.find((r) => fuzzyMatch(recipeName, r.name));
+      
+      // Determine duplicate status
+      let duplicateStatus: DuplicateStatus = "new";
+      if (existingMenuItem && existingRecipe) {
+        duplicateStatus = "both_exist";
+      } else if (existingMenuItem) {
+        duplicateStatus = "menu_exists";
+      } else if (existingRecipe) {
+        duplicateStatus = "recipe_exists";
+      }
+
       return {
         masterItem: master,
         matchedRecipe: match || null,
         selected: true,
+        duplicateStatus,
+        existingMenuItemId: existingMenuItem?.id,
+        existingRecipeId: existingRecipe?.id,
       };
     });
+    
     setCombinedItems(combined);
     setStep(3);
   };
@@ -296,62 +370,131 @@ const UnifiedImportWizard = ({
     return item.stationOverride || (item.masterItem.inferred_station as KitchenStation) || "line";
   };
 
-  // Step 4: Import
+  // Step 4: Import with duplicate handling
   const handleImport = async () => {
     setIsImporting(true);
     const selectedItems = combinedItems.filter((item) => item.selected);
 
+    let createdMenuItems = 0;
+    let createdRecipes = 0;
+    let skippedItems = 0;
+    let updatedMenuItems = 0;
+    let updatedRecipes = 0;
+
     try {
-      let successCount = 0;
-      let recipeCount = 0;
-
       for (const item of selectedItems) {
-        let recipeId: string | null = null;
+        const isDuplicateMenuItem = item.duplicateStatus === "menu_exists" || item.duplicateStatus === "both_exist";
+        const isDuplicateRecipe = item.duplicateStatus === "recipe_exists" || item.duplicateStatus === "both_exist";
 
-        // Create recipe if we have recipe data
-        if (item.matchedRecipe) {
-          const recipePayload = {
-            name: item.matchedRecipe.name,
-            ingredients: item.matchedRecipe.ingredients as unknown as Database["public"]["Tables"]["recipes"]["Insert"]["ingredients"],
-            method: item.matchedRecipe.method,
-            recipe_cost: item.matchedRecipe.recipe_cost,
-            portion_cost: item.matchedRecipe.portion_cost,
-            menu_price: item.masterItem.menu_price, // Use master price
-            food_cost_percent: item.masterItem.cost_percent, // Use master cost %
-          };
-
-          const { data: newRecipe, error: recipeError } = await supabase
-            .from("recipes")
-            .insert(recipePayload)
-            .select("id")
-            .single();
-
-          if (recipeError) {
-            console.error("Error creating recipe:", recipeError);
-          } else {
-            recipeId = newRecipe.id;
-            recipeCount++;
-          }
+        // Handle menu item duplicates
+        if (isDuplicateMenuItem && duplicateHandling === "skip") {
+          skippedItems++;
+          continue; // Skip this item entirely
         }
 
-        // Create menu item
-        const { error: menuError } = await supabase.from("menu_items").insert({
-          name: item.masterItem.name,
-          station: getStation(item),
-          unit: "portions",
-          recipe_id: recipeId,
-        });
+        let recipeId: string | null = null;
 
-        if (menuError) {
-          console.error("Error creating menu item:", menuError);
-        } else {
-          successCount++;
+        // Handle recipe
+        if (item.matchedRecipe) {
+          if (isDuplicateRecipe && item.existingRecipeId) {
+            if (duplicateHandling === "update") {
+              // Update existing recipe
+              const { error: recipeError } = await supabase
+                .from("recipes")
+                .update({
+                  ingredients: item.matchedRecipe.ingredients as unknown as Database["public"]["Tables"]["recipes"]["Update"]["ingredients"],
+                  method: item.matchedRecipe.method,
+                  recipe_cost: item.matchedRecipe.recipe_cost,
+                  portion_cost: item.matchedRecipe.portion_cost,
+                  menu_price: item.masterItem.menu_price,
+                  food_cost_percent: item.masterItem.cost_percent,
+                })
+                .eq("id", item.existingRecipeId);
+
+              if (recipeError) {
+                console.error("Error updating recipe:", recipeError);
+              } else {
+                updatedRecipes++;
+                recipeId = item.existingRecipeId;
+              }
+            } else {
+              // Skip mode - use existing recipe
+              recipeId = item.existingRecipeId;
+            }
+          } else {
+            // Create new recipe
+            const recipePayload = {
+              name: item.matchedRecipe.name,
+              ingredients: item.matchedRecipe.ingredients as unknown as Database["public"]["Tables"]["recipes"]["Insert"]["ingredients"],
+              method: item.matchedRecipe.method,
+              recipe_cost: item.matchedRecipe.recipe_cost,
+              portion_cost: item.matchedRecipe.portion_cost,
+              menu_price: item.masterItem.menu_price,
+              food_cost_percent: item.masterItem.cost_percent,
+            };
+
+            const { data: newRecipe, error: recipeError } = await supabase
+              .from("recipes")
+              .insert(recipePayload)
+              .select("id")
+              .single();
+
+            if (recipeError) {
+              console.error("Error creating recipe:", recipeError);
+            } else {
+              recipeId = newRecipe.id;
+              createdRecipes++;
+            }
+          }
+        } else if (item.existingRecipeId) {
+          // No parsed recipe but existing recipe found - link to it
+          recipeId = item.existingRecipeId;
+        }
+
+        // Handle menu item
+        if (isDuplicateMenuItem && item.existingMenuItemId && duplicateHandling === "update") {
+          // Update existing menu item
+          const { error: menuError } = await supabase
+            .from("menu_items")
+            .update({
+              station: getStation(item),
+              recipe_id: recipeId,
+            })
+            .eq("id", item.existingMenuItemId);
+
+          if (menuError) {
+            console.error("Error updating menu item:", menuError);
+          } else {
+            updatedMenuItems++;
+          }
+        } else if (!isDuplicateMenuItem) {
+          // Create new menu item
+          const { error: menuError } = await supabase.from("menu_items").insert({
+            name: item.masterItem.name,
+            station: getStation(item),
+            unit: "portions",
+            recipe_id: recipeId,
+          });
+
+          if (menuError) {
+            console.error("Error creating menu item:", menuError);
+          } else {
+            createdMenuItems++;
+          }
         }
       }
 
+      // Build summary message
+      const summaryParts: string[] = [];
+      if (createdMenuItems > 0) summaryParts.push(`Created ${createdMenuItems} menu items`);
+      if (createdRecipes > 0) summaryParts.push(`${createdRecipes} recipes`);
+      if (updatedMenuItems > 0) summaryParts.push(`Updated ${updatedMenuItems} items`);
+      if (updatedRecipes > 0) summaryParts.push(`${updatedRecipes} recipes`);
+      if (skippedItems > 0) summaryParts.push(`Skipped ${skippedItems} duplicates`);
+
       toast({
         title: "Import Complete",
-        description: `Created ${successCount} menu items and ${recipeCount} recipes`,
+        description: summaryParts.join(" • ") || "No changes made",
       });
 
       setStep(4);
@@ -365,6 +508,9 @@ const UnifiedImportWizard = ({
         setCombinedItems([]);
         setMasterFileName("");
         setRecipeFileNames([]);
+        setExistingMenuItems([]);
+        setExistingRecipes([]);
+        setDuplicateHandling("skip");
       }, 1500);
     } catch (error) {
       console.error("Import error:", error);
@@ -385,6 +531,42 @@ const UnifiedImportWizard = ({
 
   const selectedCount = combinedItems.filter((item) => item.selected).length;
   const matchedCount = combinedItems.filter((item) => item.matchedRecipe).length;
+  const duplicateCount = combinedItems.filter(
+    (item) => item.duplicateStatus !== "new"
+  ).length;
+  const newItemsCount = combinedItems.filter(
+    (item) => item.selected && item.duplicateStatus === "new"
+  ).length;
+
+  // Get duplicate status badge
+  const getDuplicateStatusBadge = (status: DuplicateStatus) => {
+    switch (status) {
+      case "new":
+        return (
+          <Badge variant="default" className="bg-green-600 hover:bg-green-700 text-xs">
+            New
+          </Badge>
+        );
+      case "menu_exists":
+        return (
+          <Badge variant="secondary" className="bg-yellow-600 hover:bg-yellow-700 text-white text-xs">
+            Exists
+          </Badge>
+        );
+      case "recipe_exists":
+        return (
+          <Badge variant="secondary" className="bg-blue-600 hover:bg-blue-700 text-white text-xs">
+            Recipe Exists
+          </Badge>
+        );
+      case "both_exist":
+        return (
+          <Badge variant="secondary" className="bg-orange-600 hover:bg-orange-700 text-white text-xs">
+            Both Exist
+          </Badge>
+        );
+    }
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -496,138 +678,192 @@ const UnifiedImportWizard = ({
         {/* Step 3: Review & Match */}
         {step === 3 && (
           <div className="space-y-4">
-            <div className="flex items-center justify-between border-b pb-2">
-              <div className="space-y-1">
-                <span className="text-sm text-muted-foreground">
-                  {masterItems.length} menu items • {matchedCount} with recipes
-                </span>
+            {isLoadingExisting ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                <span className="ml-2 text-muted-foreground">Checking for duplicates...</span>
               </div>
-              <Button variant="ghost" size="sm" onClick={toggleAll}>
-                {combinedItems.every((i) => i.selected) ? "Deselect All" : "Select All"}
-              </Button>
-            </div>
-
-            <ScrollArea className="max-h-[45vh] pr-4">
-              <Accordion type="multiple" className="space-y-2">
-                {combinedItems.map((item, index) => (
-                  <AccordionItem
-                    key={index}
-                    value={`item-${index}`}
-                    className="border rounded-lg px-4"
-                  >
-                    <div className="flex items-center gap-3 py-2">
-                      <Checkbox
-                        checked={item.selected}
-                        onCheckedChange={() => toggleSelection(index)}
-                        onClick={(e) => e.stopPropagation()}
-                      />
-                      <AccordionTrigger className="flex-1 hover:no-underline">
-                        <div className="flex items-center gap-2 text-left flex-1">
-                          <span className="font-medium">{item.masterItem.name}</span>
-                          <Badge variant="secondary" className="text-xs">
-                            {item.masterItem.category}
-                          </Badge>
-                          {item.matchedRecipe ? (
-                            <Badge variant="default" className="text-xs">
-                              <CheckCircle2 className="h-3 w-3 mr-1" />
-                              Recipe
-                            </Badge>
-                          ) : (
-                            <Badge variant="outline" className="text-xs">
-                              <AlertCircle className="h-3 w-3 mr-1" />
-                              No Recipe
-                            </Badge>
-                          )}
-                        </div>
-                      </AccordionTrigger>
-                      <div onClick={(e) => e.stopPropagation()}>
-                        <Select
-                          value={getStation(item)}
-                          onValueChange={(v) => setStation(index, v as KitchenStation)}
-                        >
-                          <SelectTrigger className="w-28 h-8">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {STATIONS.map((s) => (
-                              <SelectItem key={s.value} value={s.value}>
-                                {s.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
+            ) : (
+              <>
+                {/* Duplicate handling controls */}
+                {duplicateCount > 0 && (
+                  <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-4 space-y-3">
+                    <div className="flex items-center gap-2 text-yellow-600 dark:text-yellow-400">
+                      <AlertCircle className="h-5 w-5" />
+                      <span className="font-medium">
+                        {duplicateCount} duplicate{duplicateCount > 1 ? "s" : ""} found
+                      </span>
                     </div>
+                    <RadioGroup
+                      value={duplicateHandling}
+                      onValueChange={(v) => setDuplicateHandling(v as "skip" | "update")}
+                      className="flex gap-6"
+                    >
+                      <div className="flex items-center space-x-2">
+                        <RadioGroupItem value="skip" id="skip" />
+                        <Label htmlFor="skip" className="flex items-center gap-1 cursor-pointer">
+                          <SkipForward className="h-4 w-4" />
+                          Skip existing items
+                        </Label>
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        <RadioGroupItem value="update" id="update" />
+                        <Label htmlFor="update" className="flex items-center gap-1 cursor-pointer">
+                          <RefreshCw className="h-4 w-4" />
+                          Update existing items
+                        </Label>
+                      </div>
+                    </RadioGroup>
+                  </div>
+                )}
 
-                    <AccordionContent className="pb-4">
-                      <div className="space-y-4 pl-7">
-                        {/* Financial Data */}
-                        <div className="flex flex-wrap gap-4 text-sm">
-                          <div className="flex items-center gap-1">
-                            <DollarSign className="h-3.5 w-3.5 text-muted-foreground" />
-                            <span>Price: {formatCurrency(item.masterItem.menu_price)}</span>
+                <div className="flex items-center justify-between border-b pb-2">
+                  <div className="space-y-1">
+                    <span className="text-sm text-muted-foreground">
+                      {masterItems.length} menu items • {matchedCount} with recipes • {newItemsCount} new
+                    </span>
+                  </div>
+                  <Button variant="ghost" size="sm" onClick={toggleAll}>
+                    {combinedItems.every((i) => i.selected) ? "Deselect All" : "Select All"}
+                  </Button>
+                </div>
+
+                <ScrollArea className="max-h-[40vh] pr-4">
+                  <Accordion type="multiple" className="space-y-2">
+                    {combinedItems.map((item, index) => (
+                      <AccordionItem
+                        key={index}
+                        value={`item-${index}`}
+                        className="border rounded-lg px-4"
+                      >
+                        <div className="flex items-center gap-3 py-2">
+                          <Checkbox
+                            checked={item.selected}
+                            onCheckedChange={() => toggleSelection(index)}
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                          <AccordionTrigger className="flex-1 hover:no-underline">
+                            <div className="flex items-center gap-2 text-left flex-1 flex-wrap">
+                              <span className="font-medium">{item.masterItem.name}</span>
+                              <Badge variant="secondary" className="text-xs">
+                                {item.masterItem.category}
+                              </Badge>
+                              {getDuplicateStatusBadge(item.duplicateStatus)}
+                              {item.matchedRecipe ? (
+                                <Badge variant="default" className="text-xs">
+                                  <CheckCircle2 className="h-3 w-3 mr-1" />
+                                  Recipe
+                                </Badge>
+                              ) : (
+                                <Badge variant="outline" className="text-xs">
+                                  <AlertCircle className="h-3 w-3 mr-1" />
+                                  No Recipe
+                                </Badge>
+                              )}
+                            </div>
+                          </AccordionTrigger>
+                          <div onClick={(e) => e.stopPropagation()}>
+                            <Select
+                              value={getStation(item)}
+                              onValueChange={(v) => setStation(index, v as KitchenStation)}
+                            >
+                              <SelectTrigger className="w-28 h-8">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {STATIONS.map((s) => (
+                                  <SelectItem key={s.value} value={s.value}>
+                                    {s.label}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
                           </div>
-                          <div className="flex items-center gap-1">
-                            <span className="text-muted-foreground">Cost:</span>
-                            <span>{formatCurrency(item.masterItem.food_cost)}</span>
-                          </div>
-                          <Badge
-                            variant={item.masterItem.cost_percent <= 35 ? "default" : "secondary"}
-                          >
-                            {item.masterItem.cost_percent.toFixed(1)}% food cost
-                          </Badge>
                         </div>
 
-                        {/* Matched Recipe Info */}
-                        {item.matchedRecipe && (
-                          <div className="space-y-2">
-                            <div className="flex items-center gap-2 text-sm text-primary">
-                              <ChefHat className="h-4 w-4" />
-                              <span>
-                                Matched: <strong>{item.matchedRecipe.name}</strong>
-                              </span>
-                              <Badge variant="outline" className="text-xs">
-                                {item.matchedRecipe.ingredients.length} ingredients
+                        <AccordionContent className="pb-4">
+                          <div className="space-y-4 pl-7">
+                            {/* Duplicate info */}
+                            {item.duplicateStatus !== "new" && (
+                              <div className="text-sm text-muted-foreground italic bg-muted/50 rounded p-2">
+                                {item.duplicateStatus === "menu_exists" &&
+                                  `Menu item already exists in database. Will ${duplicateHandling === "skip" ? "skip" : "update"}.`}
+                                {item.duplicateStatus === "recipe_exists" &&
+                                  `Recipe already exists. Will ${duplicateHandling === "skip" ? "link to existing" : "update existing"}.`}
+                                {item.duplicateStatus === "both_exist" &&
+                                  `Both menu item and recipe exist. Will ${duplicateHandling === "skip" ? "skip entirely" : "update both"}.`}
+                              </div>
+                            )}
+
+                            {/* Financial Data */}
+                            <div className="flex flex-wrap gap-4 text-sm">
+                              <div className="flex items-center gap-1">
+                                <DollarSign className="h-3.5 w-3.5 text-muted-foreground" />
+                                <span>Price: {formatCurrency(item.masterItem.menu_price)}</span>
+                              </div>
+                              <div className="flex items-center gap-1">
+                                <span className="text-muted-foreground">Cost:</span>
+                                <span>{formatCurrency(item.masterItem.food_cost)}</span>
+                              </div>
+                              <Badge
+                                variant={item.masterItem.cost_percent <= 35 ? "default" : "secondary"}
+                              >
+                                {item.masterItem.cost_percent.toFixed(1)}% food cost
                               </Badge>
                             </div>
 
-                            {/* Ingredients Preview */}
-                            <div className="grid gap-1 text-sm">
-                              {item.matchedRecipe.ingredients.slice(0, 4).map((ing, i) => (
-                                <div key={i} className="flex justify-between text-muted-foreground">
-                                  <span>{ing.item}</span>
+                            {/* Matched Recipe Info */}
+                            {item.matchedRecipe && (
+                              <div className="space-y-2">
+                                <div className="flex items-center gap-2 text-sm text-primary">
+                                  <ChefHat className="h-4 w-4" />
                                   <span>
-                                    {ing.quantity} {ing.measure}
+                                    Matched: <strong>{item.matchedRecipe.name}</strong>
                                   </span>
+                                  <Badge variant="outline" className="text-xs">
+                                    {item.matchedRecipe.ingredients.length} ingredients
+                                  </Badge>
                                 </div>
-                              ))}
-                              {item.matchedRecipe.ingredients.length > 4 && (
-                                <span className="text-muted-foreground text-xs">
-                                  +{item.matchedRecipe.ingredients.length - 4} more...
-                                </span>
-                              )}
-                            </div>
 
-                            {/* Method Preview */}
-                            {item.matchedRecipe.method && (
-                              <p className="text-sm text-muted-foreground line-clamp-2">
-                                {item.matchedRecipe.method}
+                                {/* Ingredients Preview */}
+                                <div className="grid gap-1 text-sm">
+                                  {item.matchedRecipe.ingredients.slice(0, 4).map((ing, i) => (
+                                    <div key={i} className="flex justify-between text-muted-foreground">
+                                      <span>{ing.item}</span>
+                                      <span>
+                                        {ing.quantity} {ing.measure}
+                                      </span>
+                                    </div>
+                                  ))}
+                                  {item.matchedRecipe.ingredients.length > 4 && (
+                                    <span className="text-muted-foreground text-xs">
+                                      +{item.matchedRecipe.ingredients.length - 4} more...
+                                    </span>
+                                  )}
+                                </div>
+
+                                {/* Method Preview */}
+                                {item.matchedRecipe.method && (
+                                  <p className="text-sm text-muted-foreground line-clamp-2">
+                                    {item.matchedRecipe.method}
+                                  </p>
+                                )}
+                              </div>
+                            )}
+
+                            {!item.matchedRecipe && (
+                              <p className="text-sm text-muted-foreground italic">
+                                No recipe card matched. Menu item will be created without recipe data.
                               </p>
                             )}
                           </div>
-                        )}
-
-                        {!item.matchedRecipe && (
-                          <p className="text-sm text-muted-foreground italic">
-                            No recipe card matched. Menu item will be created without recipe data.
-                          </p>
-                        )}
-                      </div>
-                    </AccordionContent>
-                  </AccordionItem>
-                ))}
-              </Accordion>
-            </ScrollArea>
+                        </AccordionContent>
+                      </AccordionItem>
+                    ))}
+                  </Accordion>
+                </ScrollArea>
+              </>
+            )}
           </div>
         )}
 
@@ -669,7 +905,7 @@ const UnifiedImportWizard = ({
                 <ArrowLeft className="mr-2 h-4 w-4" />
                 Back
               </Button>
-              <Button onClick={handleImport} disabled={selectedCount === 0 || isImporting}>
+              <Button onClick={handleImport} disabled={selectedCount === 0 || isImporting || isLoadingExisting}>
                 {isImporting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Import {selectedCount} Items
               </Button>
