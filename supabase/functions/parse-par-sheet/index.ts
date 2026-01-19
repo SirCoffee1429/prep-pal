@@ -1,9 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
+import { corsHeaders, jsonResponse, errorResponse, handleAIError } from "../_shared/utils.ts";
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -14,10 +10,7 @@ serve(async (req) => {
     const { fileContent, fileName, menuItems, isBase64 } = await req.json();
 
     if (!fileContent) {
-      return new Response(
-        JSON.stringify({ error: "No file content provided" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return errorResponse("No file content provided", 400);
     }
 
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
@@ -108,22 +101,7 @@ IMPORTANT:
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error("AI Gateway error:", response.status, errorText);
-
-      if (response.status === 429) {
-        return new Response(
-          JSON.stringify({ error: "Rate limit exceeded. Please try again in a moment." }),
-          { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-      if (response.status === 402) {
-        return new Response(
-          JSON.stringify({ error: "AI credits exhausted. Please add more credits." }),
-          { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      throw new Error(`AI Gateway error: ${response.status}`);
+      return handleAIError(response.status, errorText);
     }
 
     const aiResponse = await response.json();
@@ -132,10 +110,7 @@ IMPORTANT:
     if (aiResponse.error) {
       const errorCode = aiResponse.error?.code;
       if (errorCode === 524) {
-        return new Response(
-          JSON.stringify({ error: "AI request timed out. Try uploading a smaller file." }),
-          { status: 504, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
+        return errorResponse("AI request timed out. Try uploading a smaller file.", 504);
       }
       throw new Error(`AI error: ${JSON.stringify(aiResponse.error)}`);
     }
@@ -162,16 +137,9 @@ IMPORTANT:
       throw new Error("Invalid response structure from AI");
     }
 
-    return new Response(
-      JSON.stringify(parsedData),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
-
+    return jsonResponse(parsedData);
   } catch (error) {
     console.error("Error processing par sheet:", error);
-    return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : "Failed to process par sheet" }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    return errorResponse(error instanceof Error ? error.message : "Failed to process par sheet", 500);
   }
 });
