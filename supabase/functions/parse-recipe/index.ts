@@ -1,12 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
+import { corsHeaders, jsonResponse, errorResponse, handleAIError } from "../_shared/utils.ts";
 
 serve(async (req) => {
-  // Handle CORS preflight
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
@@ -15,22 +10,16 @@ serve(async (req) => {
     const { fileContent, fileName } = await req.json();
 
     if (!fileContent) {
-      return new Response(
-        JSON.stringify({ error: "No file content provided" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return errorResponse("No file content provided", 400);
     }
 
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) {
       console.error("LOVABLE_API_KEY not configured");
-      return new Response(
-        JSON.stringify({ error: "AI service not configured" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return errorResponse("AI service not configured", 500);
     }
 
-const systemPrompt = `You are a professional recipe parser for a country club kitchen. You extract structured recipe data from Production Spec spreadsheet content.
+    const systemPrompt = `You are a professional recipe parser for a country club kitchen. You extract structured recipe data from Production Spec spreadsheet content.
 
 The spreadsheet follows this format:
 - Row 1: "Production Spec For: [Recipe Name]"
@@ -113,51 +102,23 @@ Return a JSON object with a "recipes" array containing all parsed recipes.`;
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error("AI Gateway error:", response.status, errorText);
-      
-      if (response.status === 429) {
-        return new Response(
-          JSON.stringify({ error: "Rate limit exceeded. Please try again in a moment." }),
-          { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-      if (response.status === 402) {
-        return new Response(
-          JSON.stringify({ error: "AI service credits exhausted." }),
-          { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-      
-      return new Response(
-        JSON.stringify({ error: "Failed to parse recipe with AI" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return handleAIError(response.status, errorText);
     }
 
     const aiResponse = await response.json();
     console.log("AI Response:", JSON.stringify(aiResponse, null, 2));
 
-    // Extract the tool call result
     const toolCall = aiResponse.choices?.[0]?.message?.tool_calls?.[0];
     if (!toolCall) {
       console.error("No tool call in response");
-      return new Response(
-        JSON.stringify({ error: "AI did not return structured data" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return errorResponse("AI did not return structured data", 500);
     }
 
     const parsedData = JSON.parse(toolCall.function.arguments);
     
-    return new Response(
-      JSON.stringify(parsedData),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    return jsonResponse(parsedData);
   } catch (error) {
     console.error("Error parsing recipe:", error);
-    return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    return errorResponse(error instanceof Error ? error.message : "Unknown error", 500);
   }
 });

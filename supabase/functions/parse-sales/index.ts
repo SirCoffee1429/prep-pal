@@ -1,9 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
+import { corsHeaders, jsonResponse, errorResponse, handleAIError } from "../_shared/utils.ts";
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -57,7 +53,6 @@ Return a JSON object with an "items" array. Each item should have:
     // Build the message content based on file type
     let userContent: any;
     if (isBase64 && fileName.toLowerCase().endsWith('.pdf')) {
-      // For PDFs, send as base64 image/document
       userContent = [
         {
           type: "text",
@@ -71,7 +66,6 @@ Return a JSON object with an "items" array. Each item should have:
         }
       ];
     } else {
-      // For text-based files (CSV, TXT, etc.)
       userContent = `Parse this sales report (${fileName}):\n\n${fileContent}`;
     }
 
@@ -93,22 +87,7 @@ Return a JSON object with an "items" array. Each item should have:
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error("AI Gateway error:", response.status, errorText);
-      
-      if (response.status === 429) {
-        return new Response(
-          JSON.stringify({ error: "Rate limit exceeded. Please wait a moment and try again." }),
-          { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-      if (response.status === 402) {
-        return new Response(
-          JSON.stringify({ error: "AI credits exhausted. Please add credits to continue." }),
-          { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-      
-      throw new Error(`AI Gateway error: ${response.status}`);
+      return handleAIError(response.status, errorText);
     }
 
     const data = await response.json();
@@ -122,14 +101,9 @@ Return a JSON object with an "items" array. Each item should have:
       parsed = { items: [] };
     }
 
-    return new Response(JSON.stringify(parsed), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return jsonResponse(parsed);
   } catch (error) {
     console.error("Parse sales error:", error);
-    return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    return errorResponse(error instanceof Error ? error.message : "Unknown error", 500);
   }
 });
