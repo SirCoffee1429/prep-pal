@@ -14,6 +14,7 @@ export interface ClassifiedFile {
   isDuplicate: boolean;
   duplicateOf?: string;
   error?: string;
+  a1Value?: string;
 }
 
 export interface BatchUploadState {
@@ -28,7 +29,26 @@ export interface BatchUploadState {
 }
 
 /**
- * Classify content based on header keywords
+ * Classify sheet type based on A1 cell value
+ * A1 = "MENU ITEM" -> menu_item
+ * A1 = "RECIPE" -> recipe
+ */
+export function classifyByA1(a1Value: string): FileType {
+  const normalized = (a1Value || '').trim().toUpperCase();
+  
+  if (normalized === "MENU ITEM" || normalized.startsWith("MENU ITEM")) {
+    return "menu_item";
+  }
+  
+  if (normalized === "RECIPE" || normalized.startsWith("RECIPE")) {
+    return "recipe";
+  }
+  
+  return "unknown";
+}
+
+/**
+ * Classify content based on header keywords (fallback)
  * Checks first ~2000 characters for identifying text
  */
 export function classifyContent(text: string): FileType {
