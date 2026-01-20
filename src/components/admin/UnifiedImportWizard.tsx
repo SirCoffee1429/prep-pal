@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import {
   Dialog,
@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
 import {
   Select,
   SelectContent,
@@ -29,7 +30,6 @@ import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import {
   Loader2,
-  Upload,
   FileSpreadsheet,
   ChefHat,
   DollarSign,
@@ -39,13 +39,26 @@ import {
   ArrowLeft,
   RefreshCw,
   SkipForward,
-  Settings2,
+  FolderUp,
+  Sparkles,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import type { Database } from "@/integrations/supabase/types";
+import BatchDropZone from "./BatchDropZone";
+import ClassifiedFileList from "./ClassifiedFileList";
+import {
+  type ClassifiedFile,
+  type FileType,
+  type BatchUploadState,
+  classifyContent,
+  generateContentHash,
+  areDuplicates,
+  generateFileId,
+  createInitialBatchState,
+  updateBatchCounts,
+} from "@/lib/fileClassification";
 
 type KitchenStation = Database["public"]["Enums"]["kitchen_station"];
-type ImportType = "menu_items" | "recipes" | "both";
 
 // Master menu item from financial workbook
 interface MasterMenuItem {
@@ -105,7 +118,6 @@ interface CombinedItem {
   duplicateStatus: DuplicateStatus;
   existingMenuItemId?: string;
   existingRecipeId?: string;
-  // Per-item overrides
   itemImportType: ItemImportType;
   itemStation: KitchenStation;
 }
@@ -130,24 +142,19 @@ const UnifiedImportWizard = ({
   onComplete,
 }: UnifiedImportWizardProps) => {
   const { toast } = useToast();
-  const masterFileRef = useRef<HTMLInputElement>(null);
-  const recipeFilesRef = useRef<HTMLInputElement>(null);
 
-  // Wizard state - now 4 steps with config first
+  // Wizard state - 4 steps
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
 
-  // Step 1: Configuration (NEW)
-  const [importType, setImportType] = useState<ImportType>("both");
+  // Step 1: Station configuration only (import type now auto-detected)
   const [selectedStation, setSelectedStation] = useState<KitchenStation | "infer">("infer");
 
-  // Step 2: File uploads
-  const [masterItems, setMasterItems] = useState<MasterMenuItem[]>([]);
-  const [isParseMasterLoading, setIsParseMasterLoading] = useState(false);
-  const [masterFileName, setMasterFileName] = useState("");
+  // Step 2: Batch upload state
+  const [batchState, setBatchState] = useState<BatchUploadState>(createInitialBatchState());
 
+  // Parsed data from AI
+  const [masterItems, setMasterItems] = useState<MasterMenuItem[]>([]);
   const [recipes, setRecipes] = useState<ParsedRecipe[]>([]);
-  const [isParseRecipesLoading, setIsParseRecipesLoading] = useState(false);
-  const [recipeFileNames, setRecipeFileNames] = useState<string[]>([]);
 
   // Step 3: Combined items for review
   const [combinedItems, setCombinedItems] = useState<CombinedItem[]>([]);
@@ -162,13 +169,11 @@ const UnifiedImportWizard = ({
   // Reset wizard state
   const resetWizard = () => {
     setStep(1);
-    setImportType("both");
     setSelectedStation("infer");
+    setBatchState(createInitialBatchState());
     setMasterItems([]);
     setRecipes([]);
     setCombinedItems([]);
-    setMasterFileName("");
-    setRecipeFileNames([]);
     setExistingMenuItems([]);
     setExistingRecipes([]);
     setDuplicateHandling("skip");
@@ -184,6 +189,138 @@ const UnifiedImportWizard = ({
     });
     return allSheetText.join("\n\n");
   };
+
+  // Extract sheets individually for multi-sheet workbooks
+  const extractSheetsFromWorkbook = (
+    workbook: XLSX.WorkBook,
+    fileName: string
+  ): Array<{ sheetName: string; content: string }> => {
+    return workbook.SheetNames.map((sheetName) => {
+      const worksheet = workbook.Sheets[sheetName];
+      const csv = XLSX.utils.sheet_to_csv(worksheet, { blankrows: false });
+      return { sheetName, content: csv };
+    });
+  };
+
+  // Process uploaded files with smart classification
+  const handleFilesSelected = useCallback(
+    async (files: File[]) => {
+      setBatchState((prev) => ({
+        ...prev,
+        isProcessing: true,
+        processingProgress: 0,
+        currentFile: "",
+      }));
+
+      const classifiedFiles: ClassifiedFile[] = [...batchState.files];
+      const totalFiles = files.length;
+      let processed = 0;
+
+      for (const file of files) {
+        setBatchState((prev) => ({
+          ...prev,
+          currentFile: file.name,
+          processingProgress: Math.round((processed / totalFiles) * 100),
+        }));
+
+        try {
+          let content: string;
+          let sheets: Array<{ sheetName: string; content: string }> = [];
+
+          if (file.name.toLowerCase().endsWith(".csv")) {
+            // Handle CSV files
+            content = await file.text();
+            sheets = [{ sheetName: "CSV", content }];
+          } else {
+            // Handle Excel files
+            const arrayBuffer = await file.arrayBuffer();
+            const workbook = XLSX.read(arrayBuffer, { type: "array" });
+            sheets = extractSheetsFromWorkbook(workbook, file.name);
+            content = sheets.map((s) => s.content).join("\n\n");
+          }
+
+          // Process each sheet
+          for (const sheet of sheets) {
+            const fileType = classifyContent(sheet.content);
+            const contentHash = generateContentHash(
+              `${file.name}-${sheet.sheetName}`,
+              sheet.content
+            );
+
+            const newFile: ClassifiedFile = {
+              id: generateFileId(),
+              fileName: file.name,
+              sheetName: sheet.sheetName,
+              fileType,
+              content: sheet.content,
+              contentHash,
+              isDuplicate: false,
+            };
+
+            // Check for duplicates against existing files
+            const duplicate = classifiedFiles.find(
+              (existing) => !existing.isDuplicate && areDuplicates(existing, newFile)
+            );
+
+            if (duplicate) {
+              newFile.isDuplicate = true;
+              newFile.duplicateOf = duplicate.fileName;
+            }
+
+            classifiedFiles.push(newFile);
+          }
+        } catch (error) {
+          console.error(`Error processing ${file.name}:`, error);
+          classifiedFiles.push({
+            id: generateFileId(),
+            fileName: file.name,
+            sheetName: "",
+            fileType: "unknown",
+            content: "",
+            contentHash: "",
+            isDuplicate: false,
+            error: error instanceof Error ? error.message : "Failed to read file",
+          });
+        }
+
+        processed++;
+      }
+
+      const newState = updateBatchCounts({
+        ...batchState,
+        files: classifiedFiles,
+        isProcessing: false,
+        processingProgress: 100,
+        currentFile: "",
+      });
+
+      setBatchState(newState);
+
+      toast({
+        title: "Files Classified",
+        description: `Found ${newState.menuItemCount} menu items, ${newState.recipeCount} recipes, ${newState.duplicateCount} duplicates`,
+      });
+    },
+    [batchState, toast]
+  );
+
+  // Remove file from batch
+  const handleRemoveFile = useCallback((id: string) => {
+    setBatchState((prev) => {
+      const filtered = prev.files.filter((f) => f.id !== id);
+      return updateBatchCounts({ ...prev, files: filtered });
+    });
+  }, []);
+
+  // Change file type manually
+  const handleChangeFileType = useCallback((id: string, type: FileType) => {
+    setBatchState((prev) => {
+      const updated = prev.files.map((f) =>
+        f.id === id ? { ...f, fileType: type } : f
+      );
+      return updateBatchCounts({ ...prev, files: updated });
+    });
+  }, []);
 
   // Fuzzy name matching
   const fuzzyMatch = (name1: string, name2: string): boolean => {
@@ -203,7 +340,9 @@ const UnifiedImportWizard = ({
 
     const words1 = n1.split(/\s+/).filter((w) => w.length > 2);
     const words2 = n2.split(/\s+/).filter((w) => w.length > 2);
-    const overlap = words1.filter((w) => words2.some((w2) => w2.includes(w) || w.includes(w2)));
+    const overlap = words1.filter((w) =>
+      words2.some((w2) => w2.includes(w) || w.includes(w2))
+    );
     return overlap.length >= 1 && overlap.length >= Math.min(words1.length, words2.length) * 0.5;
   };
 
@@ -229,107 +368,6 @@ const UnifiedImportWizard = ({
     }
   };
 
-  // Parse master workbook
-  const handleMasterFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    setIsParseMasterLoading(true);
-    setMasterFileName(file.name);
-
-    try {
-      const arrayBuffer = await file.arrayBuffer();
-      const workbook = XLSX.read(arrayBuffer, { type: "array" });
-      const fileContent = extractTextFromWorkbook(workbook);
-
-      const response = await supabase.functions.invoke("parse-master-menu", {
-        body: { fileContent, fileName: file.name },
-      });
-
-      if (response.error) {
-        throw new Error(response.error.message);
-      }
-
-      const data = response.data;
-      if (data.error) {
-        throw new Error(data.error);
-      }
-
-      if (data.menu_items && Array.isArray(data.menu_items)) {
-        setMasterItems(data.menu_items);
-        toast({
-          title: "Master File Parsed",
-          description: `Found ${data.menu_items.length} menu items`,
-        });
-      }
-    } catch (error) {
-      console.error("Error parsing master file:", error);
-      toast({
-        title: "Parse Error",
-        description: error instanceof Error ? error.message : "Failed to parse master file",
-        variant: "destructive",
-      });
-    } finally {
-      setIsParseMasterLoading(false);
-      if (masterFileRef.current) masterFileRef.current.value = "";
-    }
-  };
-
-  // Parse recipe files
-  const handleRecipeFilesSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-
-    setIsParseRecipesLoading(true);
-    const fileNames = Array.from(files).map((f) => f.name);
-    setRecipeFileNames(fileNames);
-
-    try {
-      const parsedRecipes: ParsedRecipe[] = [];
-
-      for (const file of Array.from(files)) {
-        const arrayBuffer = await file.arrayBuffer();
-        const workbook = XLSX.read(arrayBuffer, { type: "array" });
-        const fileContent = extractTextFromWorkbook(workbook);
-
-        const response = await supabase.functions.invoke("parse-menu-items", {
-          body: { fileContent, fileName: file.name },
-        });
-
-        if (response.error) {
-          console.error(`Error parsing ${file.name}:`, response.error);
-          continue;
-        }
-
-        const data = response.data;
-        if (data.menu_items && Array.isArray(data.menu_items)) {
-          parsedRecipes.push(
-            ...data.menu_items.map((item: any) => ({
-              ...item,
-              fileName: file.name,
-            }))
-          );
-        }
-      }
-
-      setRecipes(parsedRecipes);
-      toast({
-        title: "Recipe Cards Parsed",
-        description: `Parsed ${parsedRecipes.length} recipes from ${fileNames.length} files`,
-      });
-    } catch (error) {
-      console.error("Error parsing recipe files:", error);
-      toast({
-        title: "Parse Error",
-        description: "Failed to parse some recipe files",
-        variant: "destructive",
-      });
-    } finally {
-      setIsParseRecipesLoading(false);
-      if (recipeFilesRef.current) recipeFilesRef.current.value = "";
-    }
-  };
-
   // Get the effective station for an item
   const getEffectiveStation = (inferredStation: string): KitchenStation => {
     if (selectedStation !== "infer") {
@@ -338,23 +376,111 @@ const UnifiedImportWizard = ({
     return (inferredStation as KitchenStation) || "line";
   };
 
-  // Map global import type to per-item import type default
-  const getDefaultItemImportType = (): ItemImportType => {
-    if (importType === "menu_items") return "menu_item";
-    if (importType === "recipes") return "recipe";
-    return "both";
+  // Process classified files through AI
+  const processFilesWithAI = async () => {
+    setBatchState((prev) => ({
+      ...prev,
+      isProcessing: true,
+      processingProgress: 0,
+      currentFile: "Parsing with AI...",
+    }));
+
+    const menuItemFiles = batchState.files.filter(
+      (f) => f.fileType === "menu_item" && !f.isDuplicate && !f.error
+    );
+    const recipeFiles = batchState.files.filter(
+      (f) => f.fileType === "recipe" && !f.isDuplicate && !f.error
+    );
+
+    const totalFiles = menuItemFiles.length + recipeFiles.length;
+    let processed = 0;
+    const parsedMasterItems: MasterMenuItem[] = [];
+    const parsedRecipes: ParsedRecipe[] = [];
+
+    // Process menu item files
+    for (const file of menuItemFiles) {
+      setBatchState((prev) => ({
+        ...prev,
+        currentFile: file.fileName,
+        processingProgress: Math.round((processed / totalFiles) * 100),
+      }));
+
+      try {
+        const response = await supabase.functions.invoke("parse-master-menu", {
+          body: { fileContent: file.content, fileName: file.fileName },
+        });
+
+        if (response.data?.menu_items) {
+          parsedMasterItems.push(...response.data.menu_items);
+        }
+      } catch (error) {
+        console.error(`Error parsing menu items from ${file.fileName}:`, error);
+      }
+      processed++;
+    }
+
+    // Process recipe files
+    for (const file of recipeFiles) {
+      setBatchState((prev) => ({
+        ...prev,
+        currentFile: file.fileName,
+        processingProgress: Math.round((processed / totalFiles) * 100),
+      }));
+
+      try {
+        const response = await supabase.functions.invoke("parse-menu-items", {
+          body: { fileContent: file.content, fileName: file.fileName },
+        });
+
+        if (response.data?.menu_items) {
+          parsedRecipes.push(
+            ...response.data.menu_items.map((item: any) => ({
+              ...item,
+              fileName: file.fileName,
+            }))
+          );
+        }
+      } catch (error) {
+        console.error(`Error parsing recipes from ${file.fileName}:`, error);
+      }
+      processed++;
+    }
+
+    setMasterItems(parsedMasterItems);
+    setRecipes(parsedRecipes);
+
+    setBatchState((prev) => ({
+      ...prev,
+      isProcessing: false,
+      processingProgress: 100,
+      currentFile: "",
+    }));
+
+    toast({
+      title: "AI Parsing Complete",
+      description: `Extracted ${parsedMasterItems.length} menu items and ${parsedRecipes.length} recipes`,
+    });
+
+    return { parsedMasterItems, parsedRecipes };
   };
 
   // Proceed to step 3: match items and check for duplicates
   const proceedToReview = async () => {
+    // First, process files with AI
+    const { parsedMasterItems, parsedRecipes } = await processFilesWithAI();
+
+    // Then fetch existing data
     await fetchExistingData();
 
     let combined: CombinedItem[] = [];
-    const defaultItemType = getDefaultItemImportType();
 
-    if (importType === "recipes") {
+    // Determine what we're importing based on classified files
+    const hasMenuItems = parsedMasterItems.length > 0;
+    const hasRecipes = parsedRecipes.length > 0;
+
+    if (!hasMenuItems && hasRecipes) {
       // Only recipes - create combined items from recipes
-      combined = recipes.map((recipe) => {
+      combined = parsedRecipes.map((recipe) => {
         const existingRecipe = existingRecipes.find((r) => fuzzyMatch(recipe.name, r.name));
         const existingMenuItem = existingMenuItems.find((m) => fuzzyMatch(recipe.name, m.name));
 
@@ -383,14 +509,14 @@ const UnifiedImportWizard = ({
           duplicateStatus,
           existingMenuItemId: existingMenuItem?.id,
           existingRecipeId: existingRecipe?.id,
-          itemImportType: defaultItemType,
+          itemImportType: "recipe" as ItemImportType,
           itemStation: effectiveStation,
         };
       });
-    } else {
+    } else if (hasMenuItems) {
       // Menu items (or both) - use master items
-      combined = masterItems.map((master) => {
-        const match = recipes.find((r) => fuzzyMatch(master.name, r.name));
+      combined = parsedMasterItems.map((master) => {
+        const match = parsedRecipes.find((r) => fuzzyMatch(master.name, r.name));
         const existingMenuItem = existingMenuItems.find((m) => fuzzyMatch(master.name, m.name));
         const recipeName = match?.name || master.name;
         const existingRecipe = existingRecipes.find((r) => fuzzyMatch(recipeName, r.name));
@@ -405,6 +531,7 @@ const UnifiedImportWizard = ({
         }
 
         const effectiveStation = getEffectiveStation(master.inferred_station);
+        const defaultImportType: ItemImportType = match ? "both" : "menu_item";
 
         return {
           masterItem: master,
@@ -413,7 +540,7 @@ const UnifiedImportWizard = ({
           duplicateStatus,
           existingMenuItemId: existingMenuItem?.id,
           existingRecipeId: existingRecipe?.id,
-          itemImportType: defaultItemType,
+          itemImportType: defaultImportType,
           itemStation: effectiveStation,
         };
       });
@@ -462,14 +589,15 @@ const UnifiedImportWizard = ({
 
     try {
       for (const item of selectedItems) {
-        const isDuplicateMenuItem = item.duplicateStatus === "menu_exists" || item.duplicateStatus === "both_exist";
-        const isDuplicateRecipe = item.duplicateStatus === "recipe_exists" || item.duplicateStatus === "both_exist";
-        
-        // Check per-item import type settings
-        const shouldImportRecipe = item.itemImportType === "recipe" || item.itemImportType === "both";
-        const shouldImportMenuItem = item.itemImportType === "menu_item" || item.itemImportType === "both";
+        const isDuplicateMenuItem =
+          item.duplicateStatus === "menu_exists" || item.duplicateStatus === "both_exist";
+        const isDuplicateRecipe =
+          item.duplicateStatus === "recipe_exists" || item.duplicateStatus === "both_exist";
 
-        // Handle menu item duplicates - only skip if importing menu items and duplicate exists
+        const shouldImportRecipe = item.itemImportType === "recipe" || item.itemImportType === "both";
+        const shouldImportMenuItem =
+          item.itemImportType === "menu_item" || item.itemImportType === "both";
+
         if (shouldImportMenuItem && isDuplicateMenuItem && duplicateHandling === "skip") {
           skippedItems++;
           continue;
@@ -477,14 +605,15 @@ const UnifiedImportWizard = ({
 
         let recipeId: string | null = null;
 
-        // Handle recipe (only if per-item setting includes recipes)
+        // Handle recipe
         if (shouldImportRecipe && item.matchedRecipe) {
           if (isDuplicateRecipe && item.existingRecipeId) {
             if (duplicateHandling === "update") {
               const { error: recipeError } = await supabase
                 .from("recipes")
                 .update({
-                  ingredients: item.matchedRecipe.ingredients as unknown as Database["public"]["Tables"]["recipes"]["Update"]["ingredients"],
+                  ingredients: item.matchedRecipe
+                    .ingredients as unknown as Database["public"]["Tables"]["recipes"]["Update"]["ingredients"],
                   method: item.matchedRecipe.method,
                   recipe_cost: item.matchedRecipe.recipe_cost,
                   portion_cost: item.matchedRecipe.portion_cost,
@@ -505,7 +634,8 @@ const UnifiedImportWizard = ({
           } else if (!isDuplicateRecipe) {
             const recipePayload = {
               name: item.matchedRecipe.name,
-              ingredients: item.matchedRecipe.ingredients as unknown as Database["public"]["Tables"]["recipes"]["Insert"]["ingredients"],
+              ingredients: item.matchedRecipe
+                .ingredients as unknown as Database["public"]["Tables"]["recipes"]["Insert"]["ingredients"],
               method: item.matchedRecipe.method,
               recipe_cost: item.matchedRecipe.recipe_cost,
               portion_cost: item.matchedRecipe.portion_cost,
@@ -530,7 +660,7 @@ const UnifiedImportWizard = ({
           recipeId = item.existingRecipeId;
         }
 
-        // Handle menu item (only if per-item setting includes menu items)
+        // Handle menu item
         if (shouldImportMenuItem) {
           if (isDuplicateMenuItem && item.existingMenuItemId && duplicateHandling === "update") {
             const { error: menuError } = await supabase
@@ -601,7 +731,9 @@ const UnifiedImportWizard = ({
   const selectedCount = combinedItems.filter((item) => item.selected).length;
   const matchedCount = combinedItems.filter((item) => item.matchedRecipe).length;
   const duplicateCount = combinedItems.filter((item) => item.duplicateStatus !== "new").length;
-  const newItemsCount = combinedItems.filter((item) => item.selected && item.duplicateStatus === "new").length;
+  const newItemsCount = combinedItems.filter(
+    (item) => item.selected && item.duplicateStatus === "new"
+  ).length;
 
   const getDuplicateStatusBadge = (status: DuplicateStatus) => {
     switch (status) {
@@ -634,21 +766,10 @@ const UnifiedImportWizard = ({
 
   // Check if we can proceed from step 2
   const canProceedFromStep2 = () => {
-    if (importType === "menu_items") return masterItems.length > 0;
-    if (importType === "recipes") return recipes.length > 0;
-    return masterItems.length > 0; // "both" requires master items, recipes are optional
-  };
-
-  // Get import type label
-  const getImportTypeLabel = () => {
-    switch (importType) {
-      case "menu_items":
-        return "Menu Items Only";
-      case "recipes":
-        return "Recipes Only";
-      case "both":
-        return "Menu Items + Recipes";
-    }
+    const validFiles = batchState.files.filter(
+      (f) => !f.isDuplicate && !f.error && f.fileType !== "unknown"
+    );
+    return validFiles.length > 0 && !batchState.isProcessing;
   };
 
   // Get station label
@@ -663,66 +784,31 @@ const UnifiedImportWizard = ({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <ChefHat className="h-5 w-5" />
-            Unified Menu & Recipe Import
+            Smart Batch Import
             <Badge variant="outline" className="ml-2">
               Step {step} of 4
             </Badge>
           </DialogTitle>
         </DialogHeader>
 
-        {/* Step 1: Configure Import (NEW) */}
+        {/* Step 1: Configure Station */}
         {step === 1 && (
           <div className="space-y-6 py-4">
             <div className="text-center space-y-2">
-              <Settings2 className="h-16 w-16 mx-auto text-muted-foreground" />
-              <h3 className="text-lg font-semibold">Configure Import</h3>
+              <Sparkles className="h-16 w-16 mx-auto text-primary" />
+              <h3 className="text-lg font-semibold">Smart Batch Import</h3>
               <p className="text-sm text-muted-foreground max-w-md mx-auto">
-                Select what you're importing and which station these items belong to.
+                Drop multiple files at once. The system will automatically detect menu items vs
+                recipes and filter out duplicates.
               </p>
             </div>
 
             <div className="space-y-6 max-w-md mx-auto">
-              {/* Import Type Selection */}
-              <div className="space-y-3">
-                <Label className="text-base font-medium">What are you importing?</Label>
-                <RadioGroup
-                  value={importType}
-                  onValueChange={(v) => setImportType(v as ImportType)}
-                  className="space-y-3"
-                >
-                  <div className="flex items-start space-x-3 p-3 rounded-lg border hover:bg-muted/50 transition-colors">
-                    <RadioGroupItem value="menu_items" id="menu_items" className="mt-1" />
-                    <Label htmlFor="menu_items" className="flex-1 cursor-pointer">
-                      <div className="font-medium">Menu Items Only</div>
-                      <div className="text-sm text-muted-foreground">
-                        Financial data, prices, food costs from master workbook
-                      </div>
-                    </Label>
-                  </div>
-                  <div className="flex items-start space-x-3 p-3 rounded-lg border hover:bg-muted/50 transition-colors">
-                    <RadioGroupItem value="recipes" id="recipes" className="mt-1" />
-                    <Label htmlFor="recipes" className="flex-1 cursor-pointer">
-                      <div className="font-medium">Recipes Only</div>
-                      <div className="text-sm text-muted-foreground">
-                        Ingredients, methods, prep instructions from recipe cards
-                      </div>
-                    </Label>
-                  </div>
-                  <div className="flex items-start space-x-3 p-3 rounded-lg border hover:bg-muted/50 transition-colors">
-                    <RadioGroupItem value="both" id="both" className="mt-1" />
-                    <Label htmlFor="both" className="flex-1 cursor-pointer">
-                      <div className="font-medium">Menu Items + Recipes</div>
-                      <div className="text-sm text-muted-foreground">
-                        Full import with linked recipes and financial data
-                      </div>
-                    </Label>
-                  </div>
-                </RadioGroup>
-              </div>
-
               {/* Station Selection */}
               <div className="space-y-3">
-                <Label className="text-base font-medium">Which station do these items belong to?</Label>
+                <Label className="text-base font-medium">
+                  Default station for imported items
+                </Label>
                 <Select
                   value={selectedStation}
                   onValueChange={(v) => setSelectedStation(v as KitchenStation | "infer")}
@@ -754,113 +840,73 @@ const UnifiedImportWizard = ({
           </div>
         )}
 
-        {/* Step 2: Upload Files */}
+        {/* Step 2: Batch Upload */}
         {step === 2 && (
-          <div className="space-y-6 py-4">
-            {/* Config Summary */}
+          <div className="space-y-4 py-4">
+            {/* Station Summary */}
             <div className="flex items-center justify-center gap-4 text-sm bg-muted/50 rounded-lg p-3">
-              <Badge variant="secondary">{getImportTypeLabel()}</Badge>
               <Badge variant="outline">Station: {getStationLabel()}</Badge>
             </div>
 
-            {/* Master Workbook Upload (for menu_items or both) */}
-            {(importType === "menu_items" || importType === "both") && (
-              <div className="space-y-4">
-                <div className="text-center space-y-2">
-                  <FileSpreadsheet className="h-12 w-12 mx-auto text-muted-foreground" />
-                  <h3 className="text-lg font-semibold">Upload Master Food Cost Workbook</h3>
-                  <p className="text-sm text-muted-foreground max-w-md mx-auto">
-                    Upload your master spreadsheet containing menu items, prices, and food cost data.
-                  </p>
+            {/* Drop Zone */}
+            <BatchDropZone
+              onFilesSelected={handleFilesSelected}
+              isProcessing={batchState.isProcessing}
+            />
+
+            {/* Processing Progress */}
+            {batchState.isProcessing && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-muted-foreground">{batchState.currentFile}</span>
+                  <span className="font-medium">{batchState.processingProgress}%</span>
                 </div>
+                <Progress value={batchState.processingProgress} className="h-2" />
+              </div>
+            )}
 
-                <input
-                  ref={masterFileRef}
-                  type="file"
-                  accept=".xlsx,.xls"
-                  onChange={handleMasterFileSelect}
-                  className="hidden"
-                />
-
-                <div className="flex flex-col items-center gap-3">
-                  <Button
-                    size="lg"
-                    variant={masterItems.length > 0 ? "outline" : "default"}
-                    onClick={() => masterFileRef.current?.click()}
-                    disabled={isParseMasterLoading}
-                  >
-                    {isParseMasterLoading ? (
-                      <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                    ) : (
-                      <Upload className="mr-2 h-5 w-5" />
-                    )}
-                    {masterItems.length > 0 ? "Replace Master Workbook" : "Select Master Workbook"}
-                  </Button>
-
-                  {masterItems.length > 0 && (
-                    <div className="flex items-center gap-2 text-primary">
-                      <CheckCircle2 className="h-5 w-5" />
-                      <span className="font-medium">
-                        {masterFileName}: {masterItems.length} items found
-                      </span>
-                    </div>
-                  )}
+            {/* Summary Cards */}
+            {batchState.files.length > 0 && !batchState.isProcessing && (
+              <div className="grid grid-cols-4 gap-3">
+                <div className="rounded-lg border bg-green-500/10 border-green-500/30 p-3 text-center">
+                  <div className="text-2xl font-bold text-green-600">{batchState.menuItemCount}</div>
+                  <div className="text-xs text-muted-foreground">Menu Items</div>
+                </div>
+                <div className="rounded-lg border bg-blue-500/10 border-blue-500/30 p-3 text-center">
+                  <div className="text-2xl font-bold text-blue-600">{batchState.recipeCount}</div>
+                  <div className="text-xs text-muted-foreground">Recipes</div>
+                </div>
+                <div className="rounded-lg border bg-orange-500/10 border-orange-500/30 p-3 text-center">
+                  <div className="text-2xl font-bold text-orange-600">{batchState.unknownCount}</div>
+                  <div className="text-xs text-muted-foreground">Unknown</div>
+                </div>
+                <div className="rounded-lg border bg-yellow-500/10 border-yellow-500/30 p-3 text-center">
+                  <div className="text-2xl font-bold text-yellow-600">{batchState.duplicateCount}</div>
+                  <div className="text-xs text-muted-foreground">Duplicates</div>
                 </div>
               </div>
             )}
 
-            {/* Separator */}
-            {importType === "both" && masterItems.length > 0 && (
-              <div className="border-t my-6" />
+            {/* Classified File List */}
+            {batchState.files.length > 0 && !batchState.isProcessing && (
+              <div className="space-y-2">
+                <h4 className="text-sm font-medium">Classified Files</h4>
+                <ClassifiedFileList
+                  files={batchState.files}
+                  onRemoveFile={handleRemoveFile}
+                  onChangeType={handleChangeFileType}
+                />
+              </div>
             )}
 
-            {/* Recipe Cards Upload (for recipes or both) */}
-            {(importType === "recipes" || (importType === "both" && masterItems.length > 0)) && (
-              <div className="space-y-4">
-                <div className="text-center space-y-2">
-                  <ChefHat className="h-12 w-12 mx-auto text-muted-foreground" />
-                  <h3 className="text-lg font-semibold">
-                    Upload Recipe Cards {importType === "both" && "(Optional)"}
-                  </h3>
-                  <p className="text-sm text-muted-foreground max-w-md mx-auto">
-                    Upload your individual recipe card Excel files.
-                    {importType === "both" && " These will be matched to menu items automatically."}
-                  </p>
-                </div>
-
-                <input
-                  ref={recipeFilesRef}
-                  type="file"
-                  accept=".xlsx,.xls"
-                  multiple
-                  onChange={handleRecipeFilesSelect}
-                  className="hidden"
-                />
-
-                <div className="flex flex-col items-center gap-3">
-                  <Button
-                    size="lg"
-                    variant={recipes.length > 0 ? "outline" : importType === "recipes" ? "default" : "outline"}
-                    onClick={() => recipeFilesRef.current?.click()}
-                    disabled={isParseRecipesLoading}
-                  >
-                    {isParseRecipesLoading ? (
-                      <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                    ) : (
-                      <Upload className="mr-2 h-5 w-5" />
-                    )}
-                    {recipes.length > 0 ? "Add More Recipe Files" : "Select Recipe Files"}
-                  </Button>
-
-                  {recipes.length > 0 && (
-                    <div className="flex items-center gap-2 text-primary">
-                      <CheckCircle2 className="h-5 w-5" />
-                      <span className="font-medium">
-                        {recipes.length} recipes parsed from {recipeFileNames.length} files
-                      </span>
-                    </div>
-                  )}
-                </div>
+            {/* Unknown files warning */}
+            {batchState.unknownCount > 0 && (
+              <div className="flex items-center gap-2 text-sm text-orange-600 dark:text-orange-400 bg-orange-500/10 rounded-lg p-3">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                <span>
+                  {batchState.unknownCount} file(s) couldn't be classified. You can manually set
+                  their type or remove them.
+                </span>
               </div>
             )}
           </div>
@@ -869,16 +915,23 @@ const UnifiedImportWizard = ({
         {/* Step 3: Review & Match */}
         {step === 3 && (
           <div className="space-y-4">
-            {isLoadingExisting ? (
+            {isLoadingExisting || batchState.isProcessing ? (
               <div className="flex items-center justify-center py-8">
                 <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-                <span className="ml-2 text-muted-foreground">Checking for duplicates...</span>
+                <span className="ml-2 text-muted-foreground">
+                  {batchState.isProcessing ? batchState.currentFile : "Checking for duplicates..."}
+                </span>
               </div>
             ) : (
               <>
                 {/* Config Summary */}
                 <div className="flex items-center gap-4 text-sm bg-muted/50 rounded-lg p-3">
-                  <Badge variant="secondary">{getImportTypeLabel()}</Badge>
+                  <Badge variant="secondary">
+                    {masterItems.length} Menu Items
+                  </Badge>
+                  <Badge variant="secondary">
+                    {recipes.length} Recipes
+                  </Badge>
                   <Badge variant="outline">Station: {getStationLabel()}</Badge>
                 </div>
 
@@ -888,7 +941,7 @@ const UnifiedImportWizard = ({
                     <div className="flex items-center gap-2 text-yellow-600 dark:text-yellow-400">
                       <AlertCircle className="h-5 w-5" />
                       <span className="font-medium">
-                        {duplicateCount} duplicate{duplicateCount > 1 ? "s" : ""} found
+                        {duplicateCount} duplicate{duplicateCount > 1 ? "s" : ""} found in database
                       </span>
                     </div>
                     <RadioGroup
@@ -917,7 +970,8 @@ const UnifiedImportWizard = ({
                 <div className="flex items-center justify-between border-b pb-2">
                   <div className="space-y-1">
                     <span className="text-sm text-muted-foreground">
-                      {combinedItems.length} items • {matchedCount} with recipes • {newItemsCount} new
+                      {combinedItems.length} items • {matchedCount} with recipes • {newItemsCount}{" "}
+                      new
                     </span>
                   </div>
                   <Button variant="ghost" size="sm" onClick={toggleAll}>
@@ -961,13 +1015,15 @@ const UnifiedImportWizard = ({
                               )}
                             </div>
                           </AccordionTrigger>
-                          
+
                           {/* Per-item Import Type Dropdown */}
                           <Select
                             value={item.itemImportType}
-                            onValueChange={(value: ItemImportType) => updateItemImportType(index, value)}
+                            onValueChange={(value: ItemImportType) =>
+                              updateItemImportType(index, value)
+                            }
                           >
-                            <SelectTrigger 
+                            <SelectTrigger
                               className="w-[130px] h-8 text-xs"
                               onClick={(e) => e.stopPropagation()}
                             >
@@ -983,9 +1039,11 @@ const UnifiedImportWizard = ({
                           {/* Per-item Station Dropdown */}
                           <Select
                             value={item.itemStation}
-                            onValueChange={(value: KitchenStation) => updateItemStation(index, value)}
+                            onValueChange={(value: KitchenStation) =>
+                              updateItemStation(index, value)
+                            }
                           >
-                            <SelectTrigger 
+                            <SelectTrigger
                               className="w-[100px] h-8 text-xs capitalize"
                               onClick={(e) => e.stopPropagation()}
                             >
@@ -1007,11 +1065,17 @@ const UnifiedImportWizard = ({
                             {item.duplicateStatus !== "new" && (
                               <div className="text-sm text-muted-foreground italic bg-muted/50 rounded p-2">
                                 {item.duplicateStatus === "menu_exists" &&
-                                  `Menu item already exists in database. Will ${duplicateHandling === "skip" ? "skip" : "update"}.`}
+                                  `Menu item already exists. Will ${
+                                    duplicateHandling === "skip" ? "skip" : "update"
+                                  }.`}
                                 {item.duplicateStatus === "recipe_exists" &&
-                                  `Recipe already exists. Will ${duplicateHandling === "skip" ? "link to existing" : "update existing"}.`}
+                                  `Recipe already exists. Will ${
+                                    duplicateHandling === "skip" ? "link to existing" : "update existing"
+                                  }.`}
                                 {item.duplicateStatus === "both_exist" &&
-                                  `Both menu item and recipe exist. Will ${duplicateHandling === "skip" ? "skip entirely" : "update both"}.`}
+                                  `Both menu item and recipe exist. Will ${
+                                    duplicateHandling === "skip" ? "skip entirely" : "update both"
+                                  }.`}
                               </div>
                             )}
 
@@ -1028,7 +1092,9 @@ const UnifiedImportWizard = ({
                                 </div>
                                 {item.masterItem.cost_percent > 0 && (
                                   <Badge
-                                    variant={item.masterItem.cost_percent <= 35 ? "default" : "secondary"}
+                                    variant={
+                                      item.masterItem.cost_percent <= 35 ? "default" : "secondary"
+                                    }
                                   >
                                     {item.masterItem.cost_percent.toFixed(1)}% food cost
                                   </Badge>
@@ -1052,7 +1118,10 @@ const UnifiedImportWizard = ({
                                 {/* Ingredients Preview */}
                                 <div className="grid gap-1 text-sm">
                                   {item.matchedRecipe.ingredients.slice(0, 4).map((ing, i) => (
-                                    <div key={i} className="flex justify-between text-muted-foreground">
+                                    <div
+                                      key={i}
+                                      className="flex justify-between text-muted-foreground"
+                                    >
                                       <span>{ing.item}</span>
                                       <span>
                                         {ing.quantity} {ing.measure}
@@ -1077,9 +1146,8 @@ const UnifiedImportWizard = ({
 
                             {!item.matchedRecipe && (
                               <p className="text-sm text-muted-foreground italic">
-                                {importType === "recipes"
-                                  ? "Recipe data will be imported."
-                                  : "No recipe card matched. Menu item will be created without recipe data."}
+                                No recipe card matched. Menu item will be created without recipe
+                                data.
                               </p>
                             )}
                           </div>
@@ -1118,8 +1186,16 @@ const UnifiedImportWizard = ({
                 <ArrowLeft className="mr-2 h-4 w-4" />
                 Back
               </Button>
-              <Button onClick={proceedToReview} disabled={!canProceedFromStep2()}>
-                Review & Match
+              <Button
+                onClick={proceedToReview}
+                disabled={!canProceedFromStep2()}
+              >
+                {batchState.isProcessing ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <FolderUp className="mr-2 h-4 w-4" />
+                )}
+                Parse & Review
                 <ArrowRight className="ml-2 h-4 w-4" />
               </Button>
             </>
@@ -1131,10 +1207,7 @@ const UnifiedImportWizard = ({
                 <ArrowLeft className="mr-2 h-4 w-4" />
                 Back
               </Button>
-              <Button
-                onClick={handleImport}
-                disabled={isImporting || selectedCount === 0}
-              >
+              <Button onClick={handleImport} disabled={isImporting || selectedCount === 0}>
                 {isImporting ? (
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                 ) : (
