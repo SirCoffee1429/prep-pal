@@ -849,71 +849,77 @@ const UnifiedImportWizard = ({
 
         {/* Step 2: Batch Upload */}
         {step === 2 && (
-          <div className="space-y-4 py-4">
-            {/* Station Summary */}
-            <div className="flex items-center justify-center gap-4 text-sm bg-muted/50 rounded-lg p-3">
-              <Badge variant="outline">Station: {getStationLabel()}</Badge>
+          <div className="flex flex-col max-h-[60vh] py-4">
+            {/* Fixed: Station Summary + Drop Zone */}
+            <div className="space-y-4 flex-shrink-0">
+              {/* Station Summary */}
+              <div className="flex items-center justify-center gap-4 text-sm bg-muted/50 rounded-lg p-3">
+                <Badge variant="outline">Station: {getStationLabel()}</Badge>
+              </div>
+
+              {/* Drop Zone */}
+              <BatchDropZone
+                onFilesSelected={handleFilesSelected}
+                isProcessing={batchState.isProcessing}
+              />
+
+              {/* Processing Progress */}
+              {batchState.isProcessing && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">{batchState.currentFile}</span>
+                    <span className="font-medium">{batchState.processingProgress}%</span>
+                  </div>
+                  <Progress value={batchState.processingProgress} className="h-2" />
+                </div>
+              )}
+
+              {/* Summary Cards */}
+              {batchState.files.length > 0 && !batchState.isProcessing && (
+                <div className="grid grid-cols-4 gap-3">
+                  <div className="rounded-lg border bg-green-500/10 border-green-500/30 p-3 text-center">
+                    <div className="text-2xl font-bold text-green-600">{batchState.menuItemCount}</div>
+                    <div className="text-xs text-muted-foreground">Menu Items</div>
+                  </div>
+                  <div className="rounded-lg border bg-blue-500/10 border-blue-500/30 p-3 text-center">
+                    <div className="text-2xl font-bold text-blue-600">{batchState.recipeCount}</div>
+                    <div className="text-xs text-muted-foreground">Recipes</div>
+                  </div>
+                  <div className="rounded-lg border bg-orange-500/10 border-orange-500/30 p-3 text-center">
+                    <div className="text-2xl font-bold text-orange-600">{batchState.unknownCount}</div>
+                    <div className="text-xs text-muted-foreground">Unknown</div>
+                  </div>
+                  <div className="rounded-lg border bg-yellow-500/10 border-yellow-500/30 p-3 text-center">
+                    <div className="text-2xl font-bold text-yellow-600">{batchState.duplicateCount}</div>
+                    <div className="text-xs text-muted-foreground">Duplicates</div>
+                  </div>
+                </div>
+              )}
             </div>
 
-            {/* Drop Zone */}
-            <BatchDropZone
-              onFilesSelected={handleFilesSelected}
-              isProcessing={batchState.isProcessing}
-            />
-
-            {/* Processing Progress */}
-            {batchState.isProcessing && (
-              <div className="space-y-2">
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-muted-foreground">{batchState.currentFile}</span>
-                  <span className="font-medium">{batchState.processingProgress}%</span>
-                </div>
-                <Progress value={batchState.processingProgress} className="h-2" />
-              </div>
-            )}
-
-            {/* Summary Cards */}
+            {/* Scrollable: File List + Warnings */}
             {batchState.files.length > 0 && !batchState.isProcessing && (
-              <div className="grid grid-cols-4 gap-3">
-                <div className="rounded-lg border bg-green-500/10 border-green-500/30 p-3 text-center">
-                  <div className="text-2xl font-bold text-green-600">{batchState.menuItemCount}</div>
-                  <div className="text-xs text-muted-foreground">Menu Items</div>
+              <div className="flex-1 overflow-hidden mt-4 space-y-4">
+                {/* Classified File List */}
+                <div className="space-y-2">
+                  <h4 className="text-sm font-medium">Classified Files</h4>
+                  <ClassifiedFileList
+                    files={batchState.files}
+                    onRemoveFile={handleRemoveFile}
+                    onChangeType={handleChangeFileType}
+                  />
                 </div>
-                <div className="rounded-lg border bg-blue-500/10 border-blue-500/30 p-3 text-center">
-                  <div className="text-2xl font-bold text-blue-600">{batchState.recipeCount}</div>
-                  <div className="text-xs text-muted-foreground">Recipes</div>
-                </div>
-                <div className="rounded-lg border bg-orange-500/10 border-orange-500/30 p-3 text-center">
-                  <div className="text-2xl font-bold text-orange-600">{batchState.unknownCount}</div>
-                  <div className="text-xs text-muted-foreground">Unknown</div>
-                </div>
-                <div className="rounded-lg border bg-yellow-500/10 border-yellow-500/30 p-3 text-center">
-                  <div className="text-2xl font-bold text-yellow-600">{batchState.duplicateCount}</div>
-                  <div className="text-xs text-muted-foreground">Duplicates</div>
-                </div>
-              </div>
-            )}
 
-            {/* Classified File List */}
-            {batchState.files.length > 0 && !batchState.isProcessing && (
-              <div className="space-y-2">
-                <h4 className="text-sm font-medium">Classified Files</h4>
-                <ClassifiedFileList
-                  files={batchState.files}
-                  onRemoveFile={handleRemoveFile}
-                  onChangeType={handleChangeFileType}
-                />
-              </div>
-            )}
-
-            {/* Unknown files warning */}
-            {batchState.unknownCount > 0 && (
-              <div className="flex items-center gap-2 text-sm text-orange-600 dark:text-orange-400 bg-orange-500/10 rounded-lg p-3">
-                <AlertCircle className="h-4 w-4 shrink-0" />
-                <span>
-                  {batchState.unknownCount} file(s) couldn't be classified. You can manually set
-                  their type or remove them.
-                </span>
+                {/* Unknown files warning */}
+                {batchState.unknownCount > 0 && (
+                  <div className="flex items-center gap-2 text-sm text-orange-600 dark:text-orange-400 bg-orange-500/10 rounded-lg p-3">
+                    <AlertCircle className="h-4 w-4 shrink-0" />
+                    <span>
+                      {batchState.unknownCount} file(s) couldn't be classified. You can manually set
+                      their type or remove them.
+                    </span>
+                  </div>
+                )}
               </div>
             )}
           </div>
