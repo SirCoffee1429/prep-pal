@@ -50,7 +50,7 @@ import {
   type ClassifiedFile,
   type FileType,
   type BatchUploadState,
-  classifyContent,
+  classifyByA1,
   generateContentHash,
   areDuplicates,
   generateFileId,
@@ -190,15 +190,20 @@ const UnifiedImportWizard = ({
     return allSheetText.join("\n\n");
   };
 
-  // Extract sheets individually for multi-sheet workbooks
+  // Extract sheets individually for multi-sheet workbooks with A1 cell value
   const extractSheetsFromWorkbook = (
     workbook: XLSX.WorkBook,
     fileName: string
-  ): Array<{ sheetName: string; content: string }> => {
+  ): Array<{ sheetName: string; content: string; a1Value: string }> => {
     return workbook.SheetNames.map((sheetName) => {
       const worksheet = workbook.Sheets[sheetName];
       const csv = XLSX.utils.sheet_to_csv(worksheet, { blankrows: false });
-      return { sheetName, content: csv };
+      
+      // Get raw A1 cell value for classification
+      const a1Cell = worksheet['A1'];
+      const a1Value = a1Cell ? String(a1Cell.v || '').trim().toUpperCase() : '';
+      
+      return { sheetName, content: csv, a1Value };
     });
   };
 
@@ -225,12 +230,14 @@ const UnifiedImportWizard = ({
 
         try {
           let content: string;
-          let sheets: Array<{ sheetName: string; content: string }> = [];
+          let sheets: Array<{ sheetName: string; content: string; a1Value: string }> = [];
 
           if (file.name.toLowerCase().endsWith(".csv")) {
-            // Handle CSV files
+            // Handle CSV files - extract A1 from first cell of first line
             content = await file.text();
-            sheets = [{ sheetName: "CSV", content }];
+            const firstLine = content.split('\n')[0] || '';
+            const a1Value = firstLine.split(',')[0]?.replace(/"/g, '').trim().toUpperCase() || '';
+            sheets = [{ sheetName: "CSV", content, a1Value }];
           } else {
             // Handle Excel files
             const arrayBuffer = await file.arrayBuffer();
@@ -239,9 +246,9 @@ const UnifiedImportWizard = ({
             content = sheets.map((s) => s.content).join("\n\n");
           }
 
-          // Process each sheet
+          // Process each sheet - use A1 cell value for classification
           for (const sheet of sheets) {
-            const fileType = classifyContent(sheet.content);
+            const fileType = classifyByA1(sheet.a1Value);
             const contentHash = generateContentHash(
               `${file.name}-${sheet.sheetName}`,
               sheet.content
