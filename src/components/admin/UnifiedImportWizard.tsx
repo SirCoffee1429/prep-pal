@@ -50,7 +50,7 @@ import {
   type ClassifiedFile,
   type FileType,
   type BatchUploadState,
-  classifyByA1,
+  classifySheet,
   generateContentHash,
   areDuplicates,
   generateFileId,
@@ -190,12 +190,13 @@ const UnifiedImportWizard = ({
     return allSheetText.join("\n\n");
   };
 
-  // Extract sheets individually for multi-sheet workbooks with A1 cell value
+  // Extract sheets individually for multi-sheet workbooks with A1 cell value and index
   const extractSheetsFromWorkbook = (
     workbook: XLSX.WorkBook,
     fileName: string
-  ): Array<{ sheetName: string; content: string; a1Value: string }> => {
-    return workbook.SheetNames.map((sheetName) => {
+  ): Array<{ sheetName: string; content: string; a1Value: string; sheetIndex: number; totalSheets: number }> => {
+    const totalSheets = workbook.SheetNames.length;
+    return workbook.SheetNames.map((sheetName, index) => {
       const worksheet = workbook.Sheets[sheetName];
       const csv = XLSX.utils.sheet_to_csv(worksheet, { blankrows: false });
       
@@ -203,7 +204,7 @@ const UnifiedImportWizard = ({
       const a1Cell = worksheet['A1'];
       const a1Value = a1Cell ? String(a1Cell.v || '').trim().toUpperCase() : '';
       
-      return { sheetName, content: csv, a1Value };
+      return { sheetName, content: csv, a1Value, sheetIndex: index, totalSheets };
     });
   };
 
@@ -229,15 +230,15 @@ const UnifiedImportWizard = ({
         }));
 
         try {
-          let content: string;
-          let sheets: Array<{ sheetName: string; content: string; a1Value: string }> = [];
+        let content: string;
+          let sheets: Array<{ sheetName: string; content: string; a1Value: string; sheetIndex: number; totalSheets: number }> = [];
 
           if (file.name.toLowerCase().endsWith(".csv")) {
-            // Handle CSV files - extract A1 from first cell of first line
+            // Handle CSV files - extract A1 from first cell of first line (no position fallback for single file)
             content = await file.text();
             const firstLine = content.split('\n')[0] || '';
             const a1Value = firstLine.split(',')[0]?.replace(/"/g, '').trim().toUpperCase() || '';
-            sheets = [{ sheetName: "CSV", content, a1Value }];
+            sheets = [{ sheetName: "CSV", content, a1Value, sheetIndex: 0, totalSheets: 1 }];
           } else {
             // Handle Excel files
             const arrayBuffer = await file.arrayBuffer();
@@ -246,9 +247,9 @@ const UnifiedImportWizard = ({
             content = sheets.map((s) => s.content).join("\n\n");
           }
 
-          // Process each sheet - use A1 cell value for classification
+          // Process each sheet - use A1 cell value with position-based fallback
           for (const sheet of sheets) {
-            const fileType = classifyByA1(sheet.a1Value);
+            const fileType = classifySheet(sheet.a1Value, sheet.sheetIndex, sheet.totalSheets);
             const contentHash = generateContentHash(
               `${file.name}-${sheet.sheetName}`,
               sheet.content

@@ -48,6 +48,32 @@ export function classifyByA1(a1Value: string): FileType {
 }
 
 /**
+ * Classify sheet type with position-based fallback for multi-sheet workbooks
+ * Primary: A1 cell value ("MENU ITEM" or "RECIPE")
+ * Fallback: Sheet position (first sheet = menu_item, rest = recipe)
+ */
+export function classifySheet(
+  a1Value: string,
+  sheetIndex: number,
+  totalSheets: number
+): FileType {
+  // Primary: Check A1 cell
+  const a1Classification = classifyByA1(a1Value);
+  
+  if (a1Classification !== "unknown") {
+    return a1Classification;
+  }
+  
+  // Fallback: Use position for multi-sheet workbooks
+  if (totalSheets > 1) {
+    return sheetIndex === 0 ? "menu_item" : "recipe";
+  }
+  
+  // Single sheet with unknown A1 - remain unknown for manual review
+  return "unknown";
+}
+
+/**
  * Classify content based on header keywords (fallback)
  * Checks first ~2000 characters for identifying text
  */
