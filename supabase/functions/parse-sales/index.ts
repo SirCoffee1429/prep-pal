@@ -37,11 +37,12 @@ ROWS TO SKIP (do NOT include these):
 ITEM NAME MATCHING:
 Try to match parsed item names to the available menu items in the system.
 When matching:
-- Ignore size prefixes like "6oz", "7oz", "8oz", "10 oz.", "10oz"
-- "Half Caesar" should match "Caesar Salad" 
-- "Full House Salad" should match "House Salad"
-- Use the closest match from available menu items
-- If no close match exists, return the original item name
+- PRESERVE "Half" and "Full" prefixes - these are DISTINCT menu items with separate tracking
+- "Half Caesar" should match "Half Caesar" exactly (NOT "Caesar")
+- "Half Chicken Club" is separate from "Chicken Club"
+- Size prefixes like "7oz", "8oz", "10 oz." should be preserved for matching
+- Use the exact match from available menu items when possible
+- If no exact match exists, return the original item name from the report
 
 Available menu items in the system: ${menuItems.join(", ")}
 
