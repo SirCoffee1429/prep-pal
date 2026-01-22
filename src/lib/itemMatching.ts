@@ -18,8 +18,7 @@ export const normalizeItemName = (name: string): string => {
   return name
     .toLowerCase()
     .replace(/^\d+\s*oz\.?\s*/i, '')      // Remove "6oz", "7oz", "10 oz." etc.
-    .replace(/^half\s+/i, '')              // Remove "Half" prefix
-    .replace(/^full\s+/i, '')              // Remove "Full" prefix
+    // Note: "Half" and "Full" prefixes are preserved - these are distinct portion sizes
     .replace(/\s+/g, ' ')                  // Normalize whitespace
     .trim();
 };
