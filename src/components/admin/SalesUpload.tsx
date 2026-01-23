@@ -12,13 +12,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { Combobox } from "@/components/ui/combobox";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { Upload, Loader2, FileText, Sparkles, Calendar, Check, X } from "lucide-react";
@@ -408,24 +402,17 @@ const SalesUpload = () => {
                       </Badge>
                     </TableCell>
                     <TableCell>
-                      <Select
+                      <Combobox
                         value={item.matched_item_id || "none"}
                         onValueChange={(value) => handleManualMatch(idx, value)}
-                      >
-                        <SelectTrigger className="w-full">
-                          <SelectValue placeholder="Select menu item..." />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="none">
-                            <span className="text-muted-foreground">No match</span>
-                          </SelectItem>
-                          {menuItems.map((menuItem) => (
-                            <SelectItem key={menuItem.id} value={menuItem.id}>
-                              {menuItem.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                        placeholder="Select menu item..."
+                        searchPlaceholder="Search items..."
+                        emptyText="No menu items found"
+                        options={[
+                          { value: "none", label: "No match" },
+                          ...menuItems.map((m) => ({ value: m.id, label: m.name }))
+                        ]}
+                      />
                     </TableCell>
                   </TableRow>
                 ))}
