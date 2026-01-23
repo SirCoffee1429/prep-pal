@@ -384,26 +384,29 @@ const UnifiedImportWizard = ({
     return (inferredStation as KitchenStation) || "line";
   };
 
-  // Process all files through unified AI analyzer
+  // Process classified files through AI
   const processFilesWithAI = async () => {
     setBatchState((prev) => ({
       ...prev,
       isProcessing: true,
       processingProgress: 0,
-      currentFile: "Analyzing with AI...",
+      currentFile: "Parsing with AI...",
     }));
 
-    // Get all non-duplicate, non-error files (regardless of classification)
-    const allFiles = batchState.files.filter(
-      (f) => !f.isDuplicate && !f.error
+    const menuItemFiles = batchState.files.filter(
+      (f) => f.fileType === "menu_item" && !f.isDuplicate && !f.error
+    );
+    const recipeFiles = batchState.files.filter(
+      (f) => f.fileType === "recipe" && !f.isDuplicate && !f.error
     );
 
-    const totalFiles = allFiles.length;
+    const totalFiles = menuItemFiles.length + recipeFiles.length;
     let processed = 0;
     const parsedMasterItems: MasterMenuItem[] = [];
     const parsedRecipes: ParsedRecipe[] = [];
 
-    for (const file of allFiles) {
+    // Process menu item files
+    for (const file of menuItemFiles) {
       setBatchState((prev) => ({
         ...prev,
         currentFile: file.fileName,
@@ -411,33 +414,42 @@ const UnifiedImportWizard = ({
       }));
 
       try {
-        const response = await supabase.functions.invoke("analyze-document", {
+        const response = await supabase.functions.invoke("parse-master-menu", {
           body: { fileContent: file.content, fileName: file.fileName },
         });
 
-        if (response.error) {
-          console.error(`Error analyzing ${file.fileName}:`, response.error);
-          processed++;
-          continue;
+        if (response.data?.menu_items) {
+          parsedMasterItems.push(...response.data.menu_items);
         }
+      } catch (error) {
+        console.error(`Error parsing menu items from ${file.fileName}:`, error);
+      }
+      processed++;
+    }
 
-        const { type, data } = response.data;
+    // Process recipe files
+    for (const file of recipeFiles) {
+      setBatchState((prev) => ({
+        ...prev,
+        currentFile: file.fileName,
+        processingProgress: Math.round((processed / totalFiles) * 100),
+      }));
 
-        // Route data based on AI-detected type
-        if (type === "menu_item" && data?.menu_items) {
-          parsedMasterItems.push(...data.menu_items);
-        } else if (type === "recipe" && data?.recipes) {
+      try {
+        const response = await supabase.functions.invoke("parse-menu-items", {
+          body: { fileContent: file.content, fileName: file.fileName },
+        });
+
+        if (response.data?.menu_items) {
           parsedRecipes.push(
-            ...data.recipes.map((recipe: any) => ({
-              ...recipe,
+            ...response.data.menu_items.map((item: any) => ({
+              ...item,
               fileName: file.fileName,
             }))
           );
         }
-        // par_sheet and sales_report types can be handled separately if needed
-        
       } catch (error) {
-        console.error(`Error processing ${file.fileName}:`, error);
+        console.error(`Error parsing recipes from ${file.fileName}:`, error);
       }
       processed++;
     }
@@ -453,7 +465,7 @@ const UnifiedImportWizard = ({
     }));
 
     toast({
-      title: "AI Analysis Complete",
+      title: "AI Parsing Complete",
       description: `Extracted ${parsedMasterItems.length} menu items and ${parsedRecipes.length} recipes`,
     });
 
