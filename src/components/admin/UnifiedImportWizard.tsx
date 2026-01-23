@@ -208,6 +208,21 @@ const UnifiedImportWizard = ({
     });
   };
 
+  // Read file as Base64 for PDF uploads
+  const readFileAsBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result as string;
+        // Strip the data URL prefix (e.g., "data:application/pdf;base64,")
+        const base64 = result.split(",")[1] || result;
+        resolve(base64);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  };
+
   // Process uploaded files with smart classification
   const handleFilesSelected = useCallback(
     async (files: File[]) => {
@@ -230,10 +245,24 @@ const UnifiedImportWizard = ({
         }));
 
         try {
-        let content: string;
-          let sheets: Array<{ sheetName: string; content: string; a1Value: string; sheetIndex: number; totalSheets: number }> = [];
+          let content: string;
+          let sheets: Array<{ sheetName: string; content: string; a1Value: string; sheetIndex: number; totalSheets: number; isBase64?: boolean; mimeType?: string }> = [];
+          const isPdf = file.name.toLowerCase().endsWith(".pdf");
 
-          if (file.name.toLowerCase().endsWith(".csv")) {
+          if (isPdf) {
+            // Handle PDF files - read as Base64
+            const base64Content = await readFileAsBase64(file);
+            sheets = [{ 
+              sheetName: "PDF", 
+              content: base64Content, 
+              a1Value: "", 
+              sheetIndex: 0, 
+              totalSheets: 1,
+              isBase64: true,
+              mimeType: "application/pdf"
+            }];
+            content = base64Content;
+          } else if (file.name.toLowerCase().endsWith(".csv")) {
             // Handle CSV files - extract A1 from first cell of first line (no position fallback for single file)
             content = await file.text();
             const firstLine = content.split('\n')[0] || '';
@@ -249,10 +278,10 @@ const UnifiedImportWizard = ({
 
           // Process each sheet - use A1 cell value with position-based fallback
           for (const sheet of sheets) {
-            const fileType = classifySheet(sheet.a1Value, sheet.sheetIndex, sheet.totalSheets);
+            const fileType = sheet.isBase64 ? "unknown" : classifySheet(sheet.a1Value, sheet.sheetIndex, sheet.totalSheets);
             const contentHash = generateContentHash(
               `${file.name}-${sheet.sheetName}`,
-              sheet.content
+              sheet.isBase64 ? sheet.sheetName : sheet.content
             );
 
             const newFile: ClassifiedFile = {
@@ -263,6 +292,7 @@ const UnifiedImportWizard = ({
               content: sheet.content,
               contentHash,
               isDuplicate: false,
+              a1Value: sheet.a1Value,
             };
 
             // Check for duplicates against existing files
@@ -306,7 +336,7 @@ const UnifiedImportWizard = ({
 
       toast({
         title: "Files Classified",
-        description: `Found ${newState.menuItemCount} menu items, ${newState.recipeCount} recipes, ${newState.duplicateCount} duplicates`,
+        description: `Found ${newState.menuItemCount} menu items, ${newState.recipeCount} recipes, ${newState.parSheetCount} par sheets, ${newState.salesCount} sales reports, ${newState.duplicateCount} duplicates`,
       });
     },
     [batchState, toast]
@@ -384,7 +414,7 @@ const UnifiedImportWizard = ({
     return (inferredStation as KitchenStation) || "line";
   };
 
-  // Process classified files through AI
+  // Process classified files through unified AI analyzer
   const processFilesWithAI = async () => {
     setBatchState((prev) => ({
       ...prev,
@@ -393,20 +423,18 @@ const UnifiedImportWizard = ({
       currentFile: "Parsing with AI...",
     }));
 
-    const menuItemFiles = batchState.files.filter(
-      (f) => f.fileType === "menu_item" && !f.isDuplicate && !f.error
-    );
-    const recipeFiles = batchState.files.filter(
-      (f) => f.fileType === "recipe" && !f.isDuplicate && !f.error
+    // Get all valid files to process
+    const filesToProcess = batchState.files.filter(
+      (f) => !f.isDuplicate && !f.error
     );
 
-    const totalFiles = menuItemFiles.length + recipeFiles.length;
+    const totalFiles = filesToProcess.length;
     let processed = 0;
     const parsedMasterItems: MasterMenuItem[] = [];
     const parsedRecipes: ParsedRecipe[] = [];
 
-    // Process menu item files
-    for (const file of menuItemFiles) {
+    // Process all files through unified analyze-document endpoint
+    for (const file of filesToProcess) {
       setBatchState((prev) => ({
         ...prev,
         currentFile: file.fileName,
@@ -414,42 +442,42 @@ const UnifiedImportWizard = ({
       }));
 
       try {
-        const response = await supabase.functions.invoke("parse-master-menu", {
-          body: { fileContent: file.content, fileName: file.fileName },
+        // Determine mime type based on file type
+        const isPdf = file.sheetName === "PDF";
+        const mimeType = isPdf ? "application/pdf" : "text/csv";
+
+        const response = await supabase.functions.invoke("analyze-document", {
+          body: { 
+            fileContent: file.content, 
+            fileName: file.fileName,
+            mimeType,
+          },
         });
 
-        if (response.data?.menu_items) {
-          parsedMasterItems.push(...response.data.menu_items);
+        if (response.error) {
+          console.error(`Error analyzing ${file.fileName}:`, response.error);
+          processed++;
+          continue;
         }
-      } catch (error) {
-        console.error(`Error parsing menu items from ${file.fileName}:`, error);
-      }
-      processed++;
-    }
 
-    // Process recipe files
-    for (const file of recipeFiles) {
-      setBatchState((prev) => ({
-        ...prev,
-        currentFile: file.fileName,
-        processingProgress: Math.round((processed / totalFiles) * 100),
-      }));
-
-      try {
-        const response = await supabase.functions.invoke("parse-menu-items", {
-          body: { fileContent: file.content, fileName: file.fileName },
-        });
-
-        if (response.data?.menu_items) {
+        const { type, data } = response.data || {};
+        
+        // Route response based on detected document type
+        if (type === "menu_item" && data?.menu_items) {
+          parsedMasterItems.push(...data.menu_items);
+        } else if (type === "recipe" && data?.recipes) {
           parsedRecipes.push(
-            ...response.data.menu_items.map((item: any) => ({
+            ...data.recipes.map((item: any) => ({
               ...item,
               fileName: file.fileName,
             }))
           );
+        } else if (type === "par_sheet" || type === "sales") {
+          // Par sheets and sales reports are handled by their dedicated dialogs
+          console.log(`Detected ${type} in ${file.fileName} - skipping for batch import`);
         }
       } catch (error) {
-        console.error(`Error parsing recipes from ${file.fileName}:`, error);
+        console.error(`Error analyzing ${file.fileName}:`, error);
       }
       processed++;
     }

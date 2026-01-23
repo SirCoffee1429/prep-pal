@@ -6,14 +6,5 @@ verify_jwt = false
 [functions.generate-prep-list]
 verify_jwt = false
 
-[functions.parse-recipe]
-verify_jwt = false
-
-[functions.parse-menu-items]
-verify_jwt = false
-
-[functions.parse-master-menu]
-verify_jwt = false
-
-[functions.parse-par-sheet]
+[functions.analyze-document]
 verify_jwt = false

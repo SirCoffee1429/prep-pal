@@ -217,13 +217,13 @@ const RecipeManagement = () => {
     try {
       const fileContent = await parseExcelToText(file);
       
-      const { data, error } = await supabase.functions.invoke("parse-recipe", {
-        body: { fileContent, fileName: file.name },
+      const { data, error } = await supabase.functions.invoke("analyze-document", {
+        body: { fileContent, fileName: file.name, mimeType: "text/csv" },
       });
 
       if (error) throw error;
       
-      if (!data?.recipes || data.recipes.length === 0) {
+      if (data?.type !== "recipe" || !data?.data?.recipes || data.data.recipes.length === 0) {
         toast({
           title: "No Recipes Found",
           description: "Could not extract any recipes from this file",
@@ -232,7 +232,7 @@ const RecipeManagement = () => {
         return;
       }
 
-      setParsedRecipes(data.recipes);
+      setParsedRecipes(data.data.recipes);
       setShowImportPreview(true);
     } catch (error) {
       console.error("Import error:", error);

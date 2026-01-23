@@ -7,13 +7,15 @@ interface BatchDropZoneProps {
   isProcessing: boolean;
   acceptedTypes?: string;
   maxFiles?: number;
+  acceptPdf?: boolean;
 }
 
 const BatchDropZone = ({
   onFilesSelected,
   isProcessing,
-  acceptedTypes = ".xlsx,.xls,.csv",
+  acceptedTypes = ".xlsx,.xls,.csv,.pdf",
   maxFiles = 50,
+  acceptPdf = true,
 }: BatchDropZoneProps) => {
   const [isDragging, setIsDragging] = useState(false);
   const [dragError, setDragError] = useState<string | null>(null);
@@ -143,7 +145,7 @@ const BatchDropZone = ({
             or click to browse
           </p>
           <p className="text-xs text-muted-foreground">
-            Accepts: .xlsx, .xls, .csv • Max {maxFiles} files
+            Accepts: Excel, CSV{acceptPdf ? ", PDF" : ""} • Max {maxFiles} files
           </p>
         </div>
       </div>
