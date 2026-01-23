@@ -1,109 +1,101 @@
 
 
-## Enhanced Recipe Details Modal for Staff Prep List
+## Make Prep List Items Clickable for Recipe Details
 
-### Overview
-Update the `RecipeModal` component to display comprehensive recipe information when staff click on prep list items, providing kitchen staff with all details needed to properly prepare each item.
+### Problem Identified
+Looking at the screenshot and code, the prep list items (like "BBQ Combo Platter", "Brisket Platter", etc.) are currently **not clickable**. Only a small BookOpen icon button on the right side opens the recipe modal - and this button only appears when the menu item has a linked recipe.
 
----
-
-### Fields to Display
-
-| Field | Description |
-|-------|-------------|
-| Recipe Name | Header title |
-| Yield Amount + Yield Measure | e.g., "Yields: 2 Quarts" |
-| Recipe Cost | Total cost formatted as currency |
-| Ingredients Table | Item, Quantity, Measure, Unit Cost, Total Cost |
-| Assembly (Method) | Step-by-step preparation instructions |
-| File URL | Link to original recipe document |
-
-**Removed:** Plating Notes (per user request)
+The user wants the **entire item row to be tappable** to view recipe details.
 
 ---
 
-### UI Layout
+### Solution
 
-```text
-┌──────────────────────────────────────────────────┐
-│ Recipe Name                              [Close] │
-├──────────────────────────────────────────────────┤
-│ ┌──────────────────────────────────────────────┐ │
-│ │ Yields: 2 Quarts  •  Recipe Cost: $24.50     │ │
-│ └──────────────────────────────────────────────┘ │
-│                                                  │
-│ INGREDIENTS                                      │
-│ ┌────────────┬─────┬───────┬────────┬─────────┐ │
-│ │ Item       │ Qty │ Measure│ Unit $ │ Total $ │ │
-│ ├────────────┼─────┼───────┼────────┼─────────┤ │
-│ │ Butter     │ 4   │ oz    │ $0.50  │ $2.00   │ │
-│ │ Heavy Cream│ 2   │ cups  │ $3.00  │ $6.00   │ │
-│ └────────────┴─────┴───────┴────────┴─────────┘ │
-│                                                  │
-│ ASSEMBLY                                         │
-│ 1. Melt butter in a saucepan...                 │
-│ 2. Add cream and simmer...                      │
-│                                                  │
-│ [View Original Recipe File]                      │
-└──────────────────────────────────────────────────┘
-```
+Make the entire `PrepListItem` card clickable to trigger the recipe modal, providing a much larger touch target that's kitchen-friendly.
 
 ---
 
 ### Implementation
 
+#### 1. Update PrepListItem Component
+
+**File:** `src/components/prep/PrepListItem.tsx`
+
+**Changes:**
+- Make the entire card clickable (not just the book icon)
+- Add cursor pointer and hover states
+- Keep the status button separate (clicking it still cycles status)
+- Remove the separate BookOpen button (entire card now does this)
+
+```tsx
+// Before: Card with separate recipe button
+<Card className="flex items-center gap-4...">
+  <button onClick={cycleStatus}>...</button>
+  <div className="flex-1">...</div>
+  {hasRecipe && <Button onClick={onViewRecipe}>...</Button>}
+</Card>
+
+// After: Clickable card with stopPropagation on status button
+<Card 
+  onClick={onViewRecipe}
+  className="flex items-center gap-4 cursor-pointer hover:bg-accent/50..."
+>
+  <button 
+    onClick={(e) => { e.stopPropagation(); cycleStatus(); }}
+  >...</button>
+  <div className="flex-1">...</div>
+  <BookOpen className="h-6 w-6 text-muted-foreground" /> {/* Visual hint */}
+</Card>
+```
+
+#### 2. Update PrepDashboard to Handle Missing Recipes
+
+**File:** `src/pages/PrepDashboard.tsx`
+
+**Changes:**
+- Pass the `menu_item_id` along with `recipe_id` to the modal
+- Allow opening modal even without a recipe to show "No recipe available" message
+
+#### 3. Update RecipeModal to Handle Missing Recipes
+
 **File:** `src/components/prep/RecipeModal.tsx`
 
 **Changes:**
-
-1. **Expand interfaces** to include all recipe fields:
-   ```typescript
-   interface Ingredient {
-     item: string;
-     quantity: string;
-     measure?: string;
-     unit_cost?: number;
-     total_cost?: number;
-   }
-   
-   interface Recipe {
-     id: string;
-     name: string;
-     ingredients: Ingredient[] | null;
-     method: string | null;
-     file_url: string | null;
-     yield_amount: string | null;
-     yield_measure: string | null;
-     recipe_cost: number | null;
-   }
-   ```
-
-2. **Add currency formatting helper**:
-   ```typescript
-   const formatCurrency = (value: number | null | undefined) => {
-     if (value == null) return "-";
-     return `$${value.toFixed(2)}`;
-   };
-   ```
-
-3. **Add Yield and Cost Summary** - styled info card below header showing yield and total recipe cost
-
-4. **Replace simple ingredients list with a table** containing columns:
-   - Item (name)
-   - Qty (quantity)
-   - Measure (unit like oz, cups)
-   - Unit $ (unit_cost)
-   - Total $ (total_cost)
-
-5. **Rename "Method" section to "Assembly"**
-
-6. **Remove Plating Notes section entirely**
+- Accept both `recipeId` and optional `menuItemName` props
+- Show a friendly message when no recipe is linked
+- Still display the modal so users get feedback on their click
 
 ---
 
 ### File Changes Summary
 
-| File | Action |
-|------|--------|
-| `src/components/prep/RecipeModal.tsx` | UPDATE - Expand Recipe interface, add yield/cost summary, enhance ingredients table, rename Method to Assembly, remove Plating Notes |
+| File | Action | Description |
+|------|--------|-------------|
+| `src/components/prep/PrepListItem.tsx` | UPDATE | Make entire card clickable, add hover state, use stopPropagation on status button |
+| `src/pages/PrepDashboard.tsx` | UPDATE | Pass menu item name to modal for "no recipe" state |
+| `src/components/prep/RecipeModal.tsx` | UPDATE | Handle case when no recipe exists, show friendly message |
+
+---
+
+### UX Improvements
+
+| Before | After |
+|--------|-------|
+| Only small book icon clickable | Entire card is tappable |
+| No feedback if no recipe | Shows "No recipe available" message |
+| Icon hidden if no recipe | Card always shows book icon hint |
+| Harder to tap on tablets | Kitchen-friendly large touch target |
+
+---
+
+### Technical Notes
+
+**Touch Target:**
+- The entire card becomes a 60px+ tall touch target
+- Status button uses `e.stopPropagation()` to prevent opening modal when cycling status
+
+**Visual Feedback:**
+- `cursor-pointer` added to card
+- `hover:bg-accent/50` provides hover feedback
+- BookOpen icon always visible as a hint that details are available
 
