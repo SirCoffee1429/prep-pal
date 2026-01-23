@@ -1,104 +1,114 @@
 
 
-## Fix: Duplicate Items in Sales Data Save
+## Add Searchable Dropdowns to Sales Item Matching
 
-### Problem Identified
-The error `"ON CONFLICT DO UPDATE command cannot affect row a second time"` occurs when the parsed sales data contains duplicate `menu_item_id` entries. This happens when:
-1. The sales report lists the same item multiple times (e.g., in different categories)
-2. Multiple parsed items get matched to the same menu item
+### Overview
+Replace the standard `Select` dropdowns in the sales data matching table with searchable Combobox components. This will make it significantly easier for users to find and select the correct menu item from a potentially large list.
 
-When trying to upsert an array with duplicates, Postgres fails because it cannot update the same row twice in a single command.
+---
 
-### Solution
-Aggregate duplicate items **before** sending to the database. Combine quantities for items with the same `menu_item_id`.
+### Current vs. Proposed UX
+
+| Current | Proposed |
+|---------|----------|
+| Standard dropdown - must scroll through all items | Searchable combobox with type-to-filter |
+| No search capability | Search bar at top of dropdown |
+| Slow for 65+ menu items | Instant filtering as you type |
 
 ---
 
 ### Implementation
 
-**File:** `src/components/admin/SalesUpload.tsx`
+#### 1. Create Reusable Combobox Component
 
-Update the `handleSaveSalesData` function to aggregate duplicates:
+**File:** `src/components/ui/combobox.tsx` (CREATE)
+
+Create a reusable searchable Combobox component using the existing `Command` and `Popover` primitives:
 
 ```typescript
-const handleSaveSalesData = async () => {
-  const matchedItems = parsedItems.filter((item) => item.matched_item_id);
-  if (matchedItems.length === 0) {
-    toast({
-      title: "No matched items",
-      description: "No items could be matched to your menu",
-      variant: "destructive",
-    });
-    return;
-  }
+// Uses existing components:
+// - Popover, PopoverTrigger, PopoverContent
+// - Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem
 
-  setIsUploading(true);
-  try {
-    // Aggregate duplicates: combine quantities for same menu_item_id
-    const aggregatedMap = new Map<string, number>();
-    matchedItems.forEach((item) => {
-      const id = item.matched_item_id!;
-      const existing = aggregatedMap.get(id) || 0;
-      aggregatedMap.set(id, existing + item.quantity);
-    });
+interface ComboboxProps {
+  options: { value: string; label: string }[];
+  value: string;
+  onValueChange: (value: string) => void;
+  placeholder?: string;
+  searchPlaceholder?: string;
+  emptyText?: string;
+}
+```
 
-    // Convert aggregated data to array format
-    const salesData = Array.from(aggregatedMap.entries()).map(([menu_item_id, quantity_sold]) => ({
-      menu_item_id,
-      sales_date: salesDate,
-      quantity_sold,
-    }));
+**Features:**
+- Search input at top of dropdown
+- Real-time filtering as user types
+- Keyboard navigation support
+- "No results found" message
+- Proper focus management
+- Dark theme compatible styling
 
-    const { error } = await supabase.from("sales_data").upsert(salesData, {
-      onConflict: "menu_item_id,sales_date",
-    });
+---
 
-    if (error) throw error;
+#### 2. Update SalesUpload Component
 
-    toast({
-      title: "Success",
-      description: `Saved sales data for ${salesData.length} unique items`,
-    });
+**File:** `src/components/admin/SalesUpload.tsx` (UPDATE)
 
-    setFile(null);
-    setParsedItems([]);
-  } catch (error) {
-    console.error("Save error:", error);
-    toast({
-      title: "Error",
-      description: "Failed to save sales data",
-      variant: "destructive",
-    });
-  } finally {
-    setIsUploading(false);
-  }
-};
+Replace the `Select` component in the menu item matching column with the new `Combobox`:
+
+**Before (lines 410-428):**
+```tsx
+<Select
+  value={item.matched_item_id || "none"}
+  onValueChange={(value) => handleManualMatch(idx, value)}
+>
+  <SelectTrigger>...</SelectTrigger>
+  <SelectContent>
+    <SelectItem value="none">No match</SelectItem>
+    {menuItems.map(...)}
+  </SelectContent>
+</Select>
+```
+
+**After:**
+```tsx
+<Combobox
+  value={item.matched_item_id || "none"}
+  onValueChange={(value) => handleManualMatch(idx, value)}
+  placeholder="Select menu item..."
+  searchPlaceholder="Search items..."
+  emptyText="No menu items found"
+  options={[
+    { value: "none", label: "No match" },
+    ...menuItems.map((m) => ({ value: m.id, label: m.name }))
+  ]}
+/>
 ```
 
 ---
 
-### Changes Summary
+### File Changes Summary
 
-| File | Change |
-|------|--------|
-| `src/components/admin/SalesUpload.tsx` | Add aggregation logic to combine duplicate menu_item_ids before upserting |
+| File | Action | Description |
+|------|--------|-------------|
+| `src/components/ui/combobox.tsx` | **CREATE** | Reusable searchable combobox component |
+| `src/components/admin/SalesUpload.tsx` | **UPDATE** | Replace Select with Combobox in matching table |
 
 ---
 
-### Technical Details
+### Technical Notes
 
-**Before (failing):**
-```javascript
-salesData = [
-  { menu_item_id: "abc", sales_date: "2024-01-22", quantity_sold: 3 },
-  { menu_item_id: "abc", sales_date: "2024-01-22", quantity_sold: 2 }, // DUPLICATE - causes error
-]
-```
+**Styling Considerations:**
+- Popover content uses `bg-popover` for proper background (not transparent)
+- High z-index (`z-50`) ensures dropdown appears above table
+- Touch-friendly sizing for tablet use (min 44px touch targets)
 
-**After (fixed):**
-```javascript
-salesData = [
-  { menu_item_id: "abc", sales_date: "2024-01-22", quantity_sold: 5 }, // Combined: 3 + 2
-]
-```
+**Accessibility:**
+- Full keyboard navigation (arrow keys, enter, escape)
+- Screen reader compatible via cmdk's built-in a11y
+- Focus returns to trigger on close
+
+**Performance:**
+- cmdk handles filtering efficiently for 100+ items
+- No re-renders of parent table during search
 
