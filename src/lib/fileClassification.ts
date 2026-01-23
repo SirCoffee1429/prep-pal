@@ -2,7 +2,7 @@
  * File classification and duplicate detection utilities for Smart Batch Upload
  */
 
-export type FileType = "menu_item" | "recipe" | "unknown";
+export type FileType = "menu_item" | "recipe" | "par_sheet" | "sales" | "unknown";
 
 export interface ClassifiedFile {
   id: string;
@@ -21,6 +21,8 @@ export interface BatchUploadState {
   files: ClassifiedFile[];
   menuItemCount: number;
   recipeCount: number;
+  parSheetCount: number;
+  salesCount: number;
   unknownCount: number;
   duplicateCount: number;
   isProcessing: boolean;
@@ -32,6 +34,8 @@ export interface BatchUploadState {
  * Classify sheet type based on A1 cell value
  * A1 = "MENU ITEM" -> menu_item
  * A1 = "RECIPE" -> recipe
+ * A1 = "PAR" or "PAR SHEET" -> par_sheet
+ * A1 = "SALES" or "ITEM SALES" -> sales
  */
 export function classifyByA1(a1Value: string): FileType {
   const normalized = (a1Value || '').trim().toUpperCase();
@@ -42,6 +46,14 @@ export function classifyByA1(a1Value: string): FileType {
   
   if (normalized === "RECIPE" || normalized.startsWith("RECIPE")) {
     return "recipe";
+  }
+  
+  if (normalized === "PAR" || normalized.startsWith("PAR")) {
+    return "par_sheet";
+  }
+  
+  if (normalized === "SALES" || normalized.includes("SALES") || normalized.includes("ITEM SALES")) {
+    return "sales";
   }
   
   return "unknown";
@@ -79,6 +91,16 @@ export function classifySheet(
  */
 export function classifyContent(text: string): FileType {
   const upperText = text.toUpperCase().slice(0, 3000);
+  
+  // Check for Sales Report identifiers
+  if (upperText.includes("ITEM SALES REPORT") || upperText.includes("UNITS SOLD") || upperText.includes("NET SALES")) {
+    return "sales";
+  }
+  
+  // Check for Par Sheet identifiers
+  if (upperText.includes("PAR SHEET") || upperText.includes("PAR LEVEL") || /\bMON\b.*\bTUE\b.*\bWED\b/i.test(upperText)) {
+    return "par_sheet";
+  }
   
   // Check for Menu Item identifiers (typically green tabs in Excel)
   if (upperText.includes("MENU ITEM") || upperText.includes("FOOD COST SPREADSHEET") || upperText.includes("MENU PRICE")) {
@@ -189,6 +211,10 @@ export function getFileTypeInfo(type: FileType): { label: string; color: string;
       return { label: "Menu Item", color: "bg-green-600", icon: "📊" };
     case "recipe":
       return { label: "Recipe", color: "bg-blue-600", icon: "📋" };
+    case "par_sheet":
+      return { label: "Par Sheet", color: "bg-purple-600", icon: "📑" };
+    case "sales":
+      return { label: "Sales Report", color: "bg-orange-600", icon: "📈" };
     case "unknown":
       return { label: "Unknown", color: "bg-yellow-600", icon: "❓" };
   }
@@ -202,6 +228,8 @@ export function createInitialBatchState(): BatchUploadState {
     files: [],
     menuItemCount: 0,
     recipeCount: 0,
+    parSheetCount: 0,
+    salesCount: 0,
     unknownCount: 0,
     duplicateCount: 0,
     isProcessing: false,
@@ -219,6 +247,8 @@ export function updateBatchCounts(state: BatchUploadState): BatchUploadState {
     ...state,
     menuItemCount: files.filter(f => f.fileType === "menu_item" && !f.isDuplicate).length,
     recipeCount: files.filter(f => f.fileType === "recipe" && !f.isDuplicate).length,
+    parSheetCount: files.filter(f => f.fileType === "par_sheet" && !f.isDuplicate).length,
+    salesCount: files.filter(f => f.fileType === "sales" && !f.isDuplicate).length,
     unknownCount: files.filter(f => f.fileType === "unknown").length,
     duplicateCount: files.filter(f => f.isDuplicate).length,
   };

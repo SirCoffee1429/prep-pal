@@ -219,8 +219,8 @@ const MenuItemManagement = () => {
         const workbook = XLSX.read(arrayBuffer, { type: "array" });
         const fileContent = extractTextFromWorkbook(workbook);
 
-        const response = await supabase.functions.invoke("parse-menu-items", {
-          body: { fileContent, fileName: file.name },
+        const response = await supabase.functions.invoke("analyze-document", {
+          body: { fileContent, fileName: file.name, mimeType: "text/csv" },
         });
 
         if (response.error) {
@@ -233,18 +233,19 @@ const MenuItemManagement = () => {
           continue;
         }
 
-        const data = response.data;
-        if (data.error) {
+        const responseData = response.data;
+        if (responseData?.error) {
           toast({
             title: "Parse Error",
-            description: data.error,
+            description: responseData.error,
             variant: "destructive",
           });
           continue;
         }
 
-        if (data.menu_items && Array.isArray(data.menu_items)) {
-          allParsedItems.push(...data.menu_items);
+        // Handle unified response structure
+        if (responseData?.type === "menu_item" && responseData?.data?.menu_items && Array.isArray(responseData.data.menu_items)) {
+          allParsedItems.push(...responseData.data.menu_items);
         }
       }
 

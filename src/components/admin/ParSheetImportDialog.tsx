@@ -153,19 +153,30 @@ const ParSheetImportDialog = ({
     try {
       const { content, isBase64 } = await readFileContent(file);
       
-      const { data, error } = await supabase.functions.invoke("parse-par-sheet", {
+      const mimeType = isBase64 ? "application/pdf" : "text/csv";
+      
+      const { data, error } = await supabase.functions.invoke("analyze-document", {
         body: {
           fileContent: content,
           fileName: file.name,
-          menuItems: menuItems.map((m) => ({ name: m.name })),
-          isBase64,
+          mimeType,
         },
       });
 
       if (error) throw error;
-      if (data.error) throw new Error(data.error);
+      if (data?.error) throw new Error(data.error);
 
-      const parsedItems: ParsedItem[] = data.items || [];
+      // Handle unified response structure for par_sheet type
+      if (data?.type !== "par_sheet") {
+        toast({
+          title: "Unexpected File Type",
+          description: `Expected a par sheet but detected ${data?.type || "unknown"}`,
+          variant: "destructive",
+        });
+        return;
+      }
+
+      const parsedItems: ParsedItem[] = data.data?.items || [];
       
       if (parsedItems.length === 0) {
         toast({
