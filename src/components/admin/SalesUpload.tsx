@@ -218,11 +218,19 @@ const SalesUpload = () => {
 
     setIsUploading(true);
     try {
-      // Upsert sales data
-      const salesData = matchedItems.map((item) => ({
-        menu_item_id: item.matched_item_id!,
+      // Aggregate duplicates: combine quantities for same menu_item_id
+      const aggregatedMap = new Map<string, number>();
+      matchedItems.forEach((item) => {
+        const id = item.matched_item_id!;
+        const existing = aggregatedMap.get(id) || 0;
+        aggregatedMap.set(id, existing + item.quantity);
+      });
+
+      // Convert aggregated data to array format
+      const salesData = Array.from(aggregatedMap.entries()).map(([menu_item_id, quantity_sold]) => ({
+        menu_item_id,
         sales_date: salesDate,
-        quantity_sold: item.quantity,
+        quantity_sold,
       }));
 
       const { error } = await supabase.from("sales_data").upsert(salesData, {
@@ -233,7 +241,7 @@ const SalesUpload = () => {
 
       toast({
         title: "Success",
-        description: `Saved sales data for ${matchedItems.length} items`,
+        description: `Saved sales data for ${salesData.length} unique items`,
       });
 
       setFile(null);
