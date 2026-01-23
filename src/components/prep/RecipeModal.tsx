@@ -39,6 +39,7 @@ interface Recipe {
 
 interface RecipeModalProps {
   recipeId: string | null;
+  itemName?: string;
   onClose: () => void;
 }
 
@@ -47,7 +48,8 @@ const formatCurrency = (value: number | null | undefined) => {
   return `$${value.toFixed(2)}`;
 };
 
-const RecipeModal = ({ recipeId, onClose }: RecipeModalProps) => {
+const RecipeModal = ({ recipeId, itemName, onClose }: RecipeModalProps) => {
+  const isOpen = recipeId !== null || itemName !== undefined;
   const [recipe, setRecipe] = useState<Recipe | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
@@ -106,7 +108,7 @@ const RecipeModal = ({ recipeId, onClose }: RecipeModalProps) => {
   const hasRecipeCost = recipe?.recipe_cost != null;
 
   return (
-    <Dialog open={!!recipeId} onOpenChange={() => onClose()}>
+    <Dialog open={isOpen} onOpenChange={() => onClose()}>
       <DialogContent className="max-h-[90vh] max-w-2xl overflow-hidden bg-recipe-bg text-recipe-foreground">
         {isLoading ? (
           <div className="flex items-center justify-center py-12">
@@ -206,8 +208,15 @@ const RecipeModal = ({ recipeId, onClose }: RecipeModalProps) => {
             </ScrollArea>
           </>
         ) : (
-          <div className="py-12 text-center text-muted-foreground">
-            Recipe not found
+          <div className="py-12 text-center">
+            <DialogHeader className="mb-4">
+              <DialogTitle className="font-display text-2xl">
+                {itemName || "Item Details"}
+              </DialogTitle>
+            </DialogHeader>
+            <p className="text-muted-foreground">
+              No recipe linked to this item yet.
+            </p>
           </div>
         )}
       </DialogContent>

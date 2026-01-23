@@ -39,7 +39,7 @@ const PrepDashboard = () => {
   const { toast } = useToast();
   const [prepItems, setPrepItems] = useState<PrepItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [selectedRecipeId, setSelectedRecipeId] = useState<string | null>(null);
+  const [selectedRecipe, setSelectedRecipe] = useState<{ recipeId: string | null; itemName: string } | null>(null);
   const [activeStation, setActiveStation] = useState<KitchenStation>("grill");
 
   // Get today's date in YYYY-MM-DD format
@@ -274,12 +274,14 @@ const PrepDashboard = () => {
                       quantity={item.quantity_needed}
                       unit={item.menu_item?.unit || "portions"}
                       status={item.status}
-                      hasRecipe={!!item.menu_item?.recipe_id}
                       onStatusChange={(newStatus) =>
                         updateStatus(item.id, newStatus)
                       }
                       onViewRecipe={() =>
-                        setSelectedRecipeId(item.menu_item?.recipe_id || null)
+                        setSelectedRecipe({
+                          recipeId: item.menu_item?.recipe_id || null,
+                          itemName: item.menu_item?.name || "Unknown",
+                        })
                       }
                     />
                   ))}
@@ -292,8 +294,9 @@ const PrepDashboard = () => {
 
       {/* Recipe Modal */}
       <RecipeModal
-        recipeId={selectedRecipeId}
-        onClose={() => setSelectedRecipeId(null)}
+        recipeId={selectedRecipe?.recipeId || null}
+        itemName={selectedRecipe?.itemName}
+        onClose={() => setSelectedRecipe(null)}
       />
     </div>
   );
