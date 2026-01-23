@@ -1,4 +1,3 @@
-import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { BookOpen, Check, Clock, Circle } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -12,7 +11,6 @@ interface PrepListItemProps {
   quantity: number;
   unit: string;
   status: PrepStatus;
-  hasRecipe: boolean;
   onStatusChange: (status: PrepStatus) => void;
   onViewRecipe: () => void;
 }
@@ -46,14 +44,14 @@ const PrepListItem = ({
   quantity,
   unit,
   status,
-  hasRecipe,
   onStatusChange,
   onViewRecipe,
 }: PrepListItemProps) => {
   const config = statusConfig[status];
   const StatusIcon = config.icon;
 
-  const cycleStatus = () => {
+  const cycleStatus = (e: React.MouseEvent) => {
+    e.stopPropagation();
     const next: Record<PrepStatus, PrepStatus> = {
       open: "in_progress",
       in_progress: "completed",
@@ -64,8 +62,9 @@ const PrepListItem = ({
 
   return (
     <Card
+      onClick={onViewRecipe}
       className={cn(
-        "flex items-center gap-4 border-2 p-4 transition-all",
+        "flex cursor-pointer items-center gap-4 border-2 p-4 transition-all hover:bg-accent/50 active:scale-[0.99]",
         config.borderClass,
         status === "completed" && "opacity-60"
       )}
@@ -101,18 +100,8 @@ const PrepListItem = ({
         </p>
       </div>
 
-      {/* Recipe Button */}
-      {hasRecipe && (
-        <Button
-          variant="outline"
-          size="icon"
-          onClick={onViewRecipe}
-          className="h-14 w-14 shrink-0"
-          aria-label="View recipe"
-        >
-          <BookOpen className="h-6 w-6" />
-        </Button>
-      )}
+      {/* Recipe Hint Icon */}
+      <BookOpen className="h-6 w-6 shrink-0 text-muted-foreground" />
     </Card>
   );
 };
