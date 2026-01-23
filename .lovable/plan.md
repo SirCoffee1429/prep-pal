@@ -1,114 +1,109 @@
 
 
-## Add Searchable Dropdowns to Sales Item Matching
+## Enhanced Recipe Details Modal for Staff Prep List
 
 ### Overview
-Replace the standard `Select` dropdowns in the sales data matching table with searchable Combobox components. This will make it significantly easier for users to find and select the correct menu item from a potentially large list.
+Update the `RecipeModal` component to display comprehensive recipe information when staff click on prep list items, providing kitchen staff with all details needed to properly prepare each item.
 
 ---
 
-### Current vs. Proposed UX
+### Fields to Display
 
-| Current | Proposed |
-|---------|----------|
-| Standard dropdown - must scroll through all items | Searchable combobox with type-to-filter |
-| No search capability | Search bar at top of dropdown |
-| Slow for 65+ menu items | Instant filtering as you type |
+| Field | Description |
+|-------|-------------|
+| Recipe Name | Header title |
+| Yield Amount + Yield Measure | e.g., "Yields: 2 Quarts" |
+| Recipe Cost | Total cost formatted as currency |
+| Ingredients Table | Item, Quantity, Measure, Unit Cost, Total Cost |
+| Assembly (Method) | Step-by-step preparation instructions |
+| File URL | Link to original recipe document |
+
+**Removed:** Plating Notes (per user request)
+
+---
+
+### UI Layout
+
+```text
+┌──────────────────────────────────────────────────┐
+│ Recipe Name                              [Close] │
+├──────────────────────────────────────────────────┤
+│ ┌──────────────────────────────────────────────┐ │
+│ │ Yields: 2 Quarts  •  Recipe Cost: $24.50     │ │
+│ └──────────────────────────────────────────────┘ │
+│                                                  │
+│ INGREDIENTS                                      │
+│ ┌────────────┬─────┬───────┬────────┬─────────┐ │
+│ │ Item       │ Qty │ Measure│ Unit $ │ Total $ │ │
+│ ├────────────┼─────┼───────┼────────┼─────────┤ │
+│ │ Butter     │ 4   │ oz    │ $0.50  │ $2.00   │ │
+│ │ Heavy Cream│ 2   │ cups  │ $3.00  │ $6.00   │ │
+│ └────────────┴─────┴───────┴────────┴─────────┘ │
+│                                                  │
+│ ASSEMBLY                                         │
+│ 1. Melt butter in a saucepan...                 │
+│ 2. Add cream and simmer...                      │
+│                                                  │
+│ [View Original Recipe File]                      │
+└──────────────────────────────────────────────────┘
+```
 
 ---
 
 ### Implementation
 
-#### 1. Create Reusable Combobox Component
+**File:** `src/components/prep/RecipeModal.tsx`
 
-**File:** `src/components/ui/combobox.tsx` (CREATE)
+**Changes:**
 
-Create a reusable searchable Combobox component using the existing `Command` and `Popover` primitives:
+1. **Expand interfaces** to include all recipe fields:
+   ```typescript
+   interface Ingredient {
+     item: string;
+     quantity: string;
+     measure?: string;
+     unit_cost?: number;
+     total_cost?: number;
+   }
+   
+   interface Recipe {
+     id: string;
+     name: string;
+     ingredients: Ingredient[] | null;
+     method: string | null;
+     file_url: string | null;
+     yield_amount: string | null;
+     yield_measure: string | null;
+     recipe_cost: number | null;
+   }
+   ```
 
-```typescript
-// Uses existing components:
-// - Popover, PopoverTrigger, PopoverContent
-// - Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem
+2. **Add currency formatting helper**:
+   ```typescript
+   const formatCurrency = (value: number | null | undefined) => {
+     if (value == null) return "-";
+     return `$${value.toFixed(2)}`;
+   };
+   ```
 
-interface ComboboxProps {
-  options: { value: string; label: string }[];
-  value: string;
-  onValueChange: (value: string) => void;
-  placeholder?: string;
-  searchPlaceholder?: string;
-  emptyText?: string;
-}
-```
+3. **Add Yield and Cost Summary** - styled info card below header showing yield and total recipe cost
 
-**Features:**
-- Search input at top of dropdown
-- Real-time filtering as user types
-- Keyboard navigation support
-- "No results found" message
-- Proper focus management
-- Dark theme compatible styling
+4. **Replace simple ingredients list with a table** containing columns:
+   - Item (name)
+   - Qty (quantity)
+   - Measure (unit like oz, cups)
+   - Unit $ (unit_cost)
+   - Total $ (total_cost)
 
----
+5. **Rename "Method" section to "Assembly"**
 
-#### 2. Update SalesUpload Component
-
-**File:** `src/components/admin/SalesUpload.tsx` (UPDATE)
-
-Replace the `Select` component in the menu item matching column with the new `Combobox`:
-
-**Before (lines 410-428):**
-```tsx
-<Select
-  value={item.matched_item_id || "none"}
-  onValueChange={(value) => handleManualMatch(idx, value)}
->
-  <SelectTrigger>...</SelectTrigger>
-  <SelectContent>
-    <SelectItem value="none">No match</SelectItem>
-    {menuItems.map(...)}
-  </SelectContent>
-</Select>
-```
-
-**After:**
-```tsx
-<Combobox
-  value={item.matched_item_id || "none"}
-  onValueChange={(value) => handleManualMatch(idx, value)}
-  placeholder="Select menu item..."
-  searchPlaceholder="Search items..."
-  emptyText="No menu items found"
-  options={[
-    { value: "none", label: "No match" },
-    ...menuItems.map((m) => ({ value: m.id, label: m.name }))
-  ]}
-/>
-```
+6. **Remove Plating Notes section entirely**
 
 ---
 
 ### File Changes Summary
 
-| File | Action | Description |
-|------|--------|-------------|
-| `src/components/ui/combobox.tsx` | **CREATE** | Reusable searchable combobox component |
-| `src/components/admin/SalesUpload.tsx` | **UPDATE** | Replace Select with Combobox in matching table |
-
----
-
-### Technical Notes
-
-**Styling Considerations:**
-- Popover content uses `bg-popover` for proper background (not transparent)
-- High z-index (`z-50`) ensures dropdown appears above table
-- Touch-friendly sizing for tablet use (min 44px touch targets)
-
-**Accessibility:**
-- Full keyboard navigation (arrow keys, enter, escape)
-- Screen reader compatible via cmdk's built-in a11y
-- Focus returns to trigger on close
-
-**Performance:**
-- cmdk handles filtering efficiently for 100+ items
-- No re-renders of parent table during search
+| File | Action |
+|------|--------|
+| `src/components/prep/RecipeModal.tsx` | UPDATE - Expand Recipe interface, add yield/cost summary, enhance ingredients table, rename Method to Assembly, remove Plating Notes |
 
