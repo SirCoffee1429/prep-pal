@@ -21,9 +21,10 @@ import {
 } from "@/components/ui/dialog";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Pencil, Trash2, Loader2, Upload, Eye, FileSpreadsheet } from "lucide-react";
+import { Plus, Pencil, Trash2, Loader2, Upload, Eye, FileSpreadsheet, FolderUp } from "lucide-react";
 import * as XLSX from "xlsx";
 import RecipeImportPreview, { ParsedRecipe, ParsedIngredient } from "./RecipeImportPreview";
+import UnifiedImportWizard from "./UnifiedImportWizard";
 
 interface Ingredient {
   item: string;
@@ -66,6 +67,7 @@ const RecipeManagement = () => {
   const [showImportPreview, setShowImportPreview] = useState(false);
   const [parsedRecipes, setParsedRecipes] = useState<ParsedRecipe[]>([]);
   const importInputRef = useRef<HTMLInputElement>(null);
+  const [showBatchImport, setShowBatchImport] = useState(false);
 
   // Form state
   const [name, setName] = useState("");
@@ -419,6 +421,10 @@ const RecipeManagement = () => {
             )}
             {isParsing ? "Parsing..." : "Import Recipe"}
           </Button>
+          <Button variant="outline" onClick={() => setShowBatchImport(true)}>
+            <FolderUp className="mr-2 h-4 w-4" />
+            Batch Import
+          </Button>
           <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
             <DialogTrigger asChild>
               <Button onClick={() => openDialog()}>
@@ -616,6 +622,12 @@ const RecipeManagement = () => {
       recipes={parsedRecipes}
       onImport={handleImportRecipes}
       isImporting={isImporting}
+    />
+    
+    <UnifiedImportWizard
+      open={showBatchImport}
+      onOpenChange={setShowBatchImport}
+      onComplete={fetchRecipes}
     />
     </>
   );
