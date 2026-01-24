@@ -6,25 +6,41 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
+import type { Database } from "@/integrations/supabase/types";
+
+type KitchenStation = Database["public"]["Enums"]["kitchen_station"];
 
 interface ParsedItem {
   id: string;
   name: string;
   type: "menu_item" | "prep_recipe" | "sales_data";
-  station: string;
+  station: KitchenStation;
   status: "new" | "duplicate_menu" | "duplicate_recipe";
   existing_id?: string;
   original_data: any;
-  source_file: string; // Tracks which workbook/sheet it came from
+  source_file: string;
 }
 
-export default function UnifiedImportWizard() {
+interface UnifiedImportWizardProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onComplete: () => void;
+}
+
+export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: UnifiedImportWizardProps) {
   const [isProcessing, setIsProcessing] = useState(false);
   const [step, setStep] = useState<"upload" | "review">("upload");
   const [items, setItems] = useState<ParsedItem[]>([]);
   const { toast } = useToast();
+
+  const handleClose = () => {
+    setStep("upload");
+    setItems([]);
+    onOpenChange(false);
+  };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -35,28 +51,24 @@ export default function UnifiedImportWizard() {
     let processedCount = 0;
 
     try {
-      // 1. LOOP THROUGH ALL UPLOADED FILES
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
 
-        // A. Handle Excel Files (Split by Sheet)
         if (file.name.endsWith(".xlsx") || file.name.endsWith(".xls")) {
           const arrayBuffer = await file.arrayBuffer();
           const workbook = XLSX.read(arrayBuffer);
 
-          // Loop through EVERY sheet in the workbook
           for (const sheetName of workbook.SheetNames) {
             const worksheet = workbook.Sheets[sheetName];
             const csv = XLSX.utils.sheet_to_csv(worksheet);
 
-            // Skip empty sheets
             if (!csv.trim()) continue;
 
-            // Send sheet to backend
-            const { data, error } = await supabase.functions.invoke("process-upload", {
+            const { data, error } = await supabase.functions.invoke("analyze-document", {
               body: {
                 fileContent: csv,
                 fileName: `${file.name} [${sheetName}]`,
+                mimeType: "text/csv",
               },
             });
 
@@ -65,36 +77,74 @@ export default function UnifiedImportWizard() {
               continue;
             }
 
-            if (data?.items) {
-              const sheetItems = data.items.map((item: any) => ({
-                ...item,
+            if (data?.data?.menu_items && Array.isArray(data.data.menu_items)) {
+              const sheetItems: ParsedItem[] = data.data.menu_items.map((item: any, idx: number) => ({
+                id: `${file.name}-${sheetName}-${idx}`,
+                name: item.name || "Unknown",
+                type: "menu_item" as const,
+                station: (item.station?.toLowerCase() as KitchenStation) || "grill",
+                status: "new" as const,
+                original_data: item,
                 source_file: `${file.name} • ${sheetName}`,
               }));
               allParsedItems.push(...sheetItems);
             }
+
+            if (data?.data?.recipes && Array.isArray(data.data.recipes)) {
+              const recipeItems: ParsedItem[] = data.data.recipes.map((item: any, idx: number) => ({
+                id: `${file.name}-${sheetName}-recipe-${idx}`,
+                name: item.name || "Unknown Recipe",
+                type: "prep_recipe" as const,
+                station: "grill" as KitchenStation,
+                status: "new" as const,
+                original_data: item,
+                source_file: `${file.name} • ${sheetName}`,
+              }));
+              allParsedItems.push(...recipeItems);
+            }
+
             processedCount++;
           }
-        }
-        // B. Handle CSV/Text Files
-        else {
+        } else {
           const textContent = await file.text();
-          const { data, error } = await supabase.functions.invoke("process-upload", {
-            body: { fileContent: textContent, fileName: file.name },
+          const { data, error } = await supabase.functions.invoke("analyze-document", {
+            body: { fileContent: textContent, fileName: file.name, mimeType: "text/csv" },
           });
 
-          if (!error && data?.items) {
-            const fileItems = data.items.map((item: any) => ({
-              ...item,
+          if (!error && data?.data?.menu_items) {
+            const fileItems: ParsedItem[] = data.data.menu_items.map((item: any, idx: number) => ({
+              id: `${file.name}-${idx}`,
+              name: item.name || "Unknown",
+              type: "menu_item" as const,
+              station: (item.station?.toLowerCase() as KitchenStation) || "grill",
+              status: "new" as const,
+              original_data: item,
               source_file: file.name,
             }));
             allParsedItems.push(...fileItems);
           }
+
+          if (!error && data?.data?.recipes) {
+            const recipeItems: ParsedItem[] = data.data.recipes.map((item: any, idx: number) => ({
+              id: `${file.name}-recipe-${idx}`,
+              name: item.name || "Unknown Recipe",
+              type: "prep_recipe" as const,
+              station: "grill" as KitchenStation,
+              status: "new" as const,
+              original_data: item,
+              source_file: file.name,
+            }));
+            allParsedItems.push(...recipeItems);
+          }
+
           processedCount++;
         }
       }
 
       setItems(allParsedItems);
-      setStep("review");
+      if (allParsedItems.length > 0) {
+        setStep("review");
+      }
       toast({
         title: "Processing Complete",
         description: `Scanned ${processedCount} sheets. Found ${allParsedItems.length} items.`,
@@ -122,29 +172,27 @@ export default function UnifiedImportWizard() {
     try {
       for (const item of items) {
         if (item.type === "menu_item") {
-          await supabase.from("menu_items").upsert({
-            ...(item.status === "duplicate_menu" && { id: item.existing_id }),
+          const { error } = await supabase.from("menu_items").insert({
             name: item.name,
-            recipe_id: null,
             station: item.station,
-            menu_price: Number(item.original_data.menu_price) || 0,
+            unit: "portions",
           });
+          if (!error) successCount++;
         } else if (item.type === "prep_recipe") {
-          await supabase.from("recipes").upsert({
-            ...(item.status === "duplicate_recipe" && { id: item.existing_id }),
+          const { error } = await supabase.from("recipes").insert({
             name: item.name,
-            ingredients: item.original_data.ingredients,
-            yield_amount: item.original_data.yield || 1,
-            recipe_cost: Number(item.original_data.recipe_cost) || 0,
-            portion_cost: Number(item.original_data.portion_cost) || 0,
+            ingredients: item.original_data.ingredients || null,
+            method: item.original_data.method || null,
+            recipe_cost: item.original_data.recipe_cost ? Number(item.original_data.recipe_cost) : null,
+            portion_cost: item.original_data.portion_cost ? Number(item.original_data.portion_cost) : null,
           });
+          if (!error) successCount++;
         }
-        successCount++;
       }
 
       toast({ title: "Success!", description: `Imported ${successCount} items.` });
-      setStep("upload");
-      setItems([]);
+      handleClose();
+      onComplete();
     } catch (error) {
       console.error(error);
       toast({ title: "Import Failed", description: "Some items could not be saved.", variant: "destructive" });
@@ -154,183 +202,160 @@ export default function UnifiedImportWizard() {
   };
 
   return (
-    <div className="max-w-6xl mx-auto p-6 space-y-6">
-      {/* HEADER */}
-      <div className="flex items-center space-x-4">
-        <div className="p-3 bg-primary/10 rounded-full">
-          <FileUp className="h-6 w-6 text-primary" />
-        </div>
-        <div>
-          <h2 className="text-2xl font-bold tracking-tight">Unified Import</h2>
-          <p className="text-muted-foreground">
-            Upload multiple workbooks. We'll check every sheet for Menu Items and Recipes.
-          </p>
-        </div>
-      </div>
-
-      {/* STEP 1: UPLOAD */}
-      {step === "upload" && (
-        <Card className="border-dashed border-2 hover:bg-accent/50 transition-colors">
-          <CardContent className="pt-6">
-            <div className="flex flex-col items-center justify-center space-y-4 py-12 text-center">
-              {isProcessing ? (
-                <div className="flex flex-col items-center gap-2">
-                  <Loader2 className="h-10 w-10 animate-spin text-primary" />
-                  <p className="text-sm text-muted-foreground">Scanning all workbooks & sheets...</p>
-                </div>
-              ) : (
-                <>
-                  <div className="p-4 bg-muted rounded-full">
-                    <Upload className="h-8 w-8 text-muted-foreground" />
-                  </div>
-                  <div className="space-y-1">
-                    <h3 className="font-semibold text-lg">Drag & drop files here</h3>
-                    <p className="text-sm text-muted-foreground">Supports multiple .xlsx or .xls files at once</p>
-                  </div>
-                  <Input
-                    type="file"
-                    multiple
-                    accept=".csv,.xlsx,.xls"
-                    className="max-w-xs cursor-pointer"
-                    onChange={handleFileUpload}
-                  />
-                </>
-              )}
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-4xl max-h-[85vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-3">
+            <div className="p-2 bg-primary/10 rounded-full">
+              <FileUp className="h-5 w-5 text-primary" />
             </div>
-          </CardContent>
-        </Card>
-      )}
+            Unified Import
+          </DialogTitle>
+        </DialogHeader>
 
-      {/* STEP 2: REVIEW */}
-      {step === "review" && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Review Detected Items</CardTitle>
-            <CardDescription>
-              Found <strong>{items.length} items</strong> across your uploaded files.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              <div className="rounded-md border overflow-hidden">
-                <table className="w-full text-sm">
-                  <thead className="bg-muted/50">
-                    <tr className="border-b">
-                      <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">Item Name</th>
-                      <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">
-                        Detected Type
-                      </th>
-                      <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">Station</th>
-                      <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">Source</th>
-                      <th className="h-12 px-4 text-left align-middle font-medium text-muted-foreground">Status</th>
-                      <th className="h-12 px-4 text-right align-middle font-medium text-muted-foreground">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {items.map((item) => (
-                      <tr key={item.id} className="border-b transition-colors hover:bg-muted/50">
-                        {/* NAME */}
-                        <td className="p-4">
-                          <Input
-                            value={item.name}
-                            onChange={(e) => updateItem(item.id, "name", e.target.value)}
-                            className="h-8 w-full min-w-[200px]"
-                          />
-                        </td>
-
-                        {/* TYPE */}
-                        <td className="p-4">
-                          <Select value={item.type} onValueChange={(val: any) => updateItem(item.id, "type", val)}>
-                            <SelectTrigger className="h-8 w-[140px]">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="menu_item">Menu Item</SelectItem>
-                              <SelectItem value="prep_recipe">Prep Recipe</SelectItem>
-                              <SelectItem value="sales_data">Sales Report</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </td>
-
-                        {/* STATION */}
-                        <td className="p-4">
-                          {item.type === "menu_item" ? (
-                            <Select value={item.station} onValueChange={(val) => updateItem(item.id, "station", val)}>
-                              <SelectTrigger className="h-8 w-[120px]">
-                                <SelectValue placeholder="Station" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="Grill">Grill</SelectItem>
-                                <SelectItem value="Saute">Saute</SelectItem>
-                                <SelectItem value="Fry">Fry</SelectItem>
-                                <SelectItem value="Salad">Salad</SelectItem>
-                                <SelectItem value="Line">Line</SelectItem>
-                              </SelectContent>
-                            </Select>
-                          ) : (
-                            <span className="text-muted-foreground text-xs pl-2">-</span>
-                          )}
-                        </td>
-
-                        {/* SOURCE FILE */}
-                        <td
-                          className="p-4 text-xs text-muted-foreground max-w-[150px] truncate"
-                          title={item.source_file}
-                        >
-                          {item.source_file}
-                        </td>
-
-                        {/* STATUS */}
-                        <td className="p-4">
-                          {item.status === "new" ? (
-                            <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">
-                              New
-                            </Badge>
-                          ) : (
-                            <Badge
-                              variant="outline"
-                              className="bg-yellow-50 text-yellow-700 border-yellow-200 flex items-center gap-1"
-                            >
-                              <AlertCircle className="w-3 h-3" /> Duplicate
-                            </Badge>
-                          )}
-                        </td>
-
-                        {/* DELETE */}
-                        <td className="p-4 text-right">
-                          <Button variant="ghost" size="icon" onClick={() => removeItem(item.id)}>
-                            <X className="h-4 w-4 text-muted-foreground" />
-                          </Button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-
-              <div className="flex justify-end gap-3 pt-4">
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setStep("upload");
-                    setItems([]);
-                  }}
-                >
-                  Cancel
-                </Button>
-                <Button onClick={handleFinalImport} disabled={isProcessing}>
+        <div className="space-y-4">
+          {/* STEP 1: UPLOAD */}
+          {step === "upload" && (
+            <Card className="border-dashed border-2 hover:bg-accent/50 transition-colors">
+              <CardContent className="pt-6">
+                <div className="flex flex-col items-center justify-center space-y-4 py-8 text-center">
                   {isProcessing ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    <div className="flex flex-col items-center gap-2">
+                      <Loader2 className="h-10 w-10 animate-spin text-primary" />
+                      <p className="text-sm text-muted-foreground">Scanning all workbooks & sheets...</p>
+                    </div>
                   ) : (
-                    <Check className="mr-2 h-4 w-4" />
+                    <>
+                      <div className="p-4 bg-muted rounded-full">
+                        <Upload className="h-8 w-8 text-muted-foreground" />
+                      </div>
+                      <div className="space-y-1">
+                        <h3 className="font-semibold text-lg">Drag & drop files here</h3>
+                        <p className="text-sm text-muted-foreground">Supports multiple .xlsx, .xls, or .csv files</p>
+                      </div>
+                      <Input
+                        type="file"
+                        multiple
+                        accept=".csv,.xlsx,.xls"
+                        className="max-w-xs cursor-pointer"
+                        onChange={handleFileUpload}
+                      />
+                    </>
                   )}
-                  Import {items.length} Items
-                </Button>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-    </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* STEP 2: REVIEW */}
+          {step === "review" && (
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base">Review Detected Items</CardTitle>
+                <CardDescription>
+                  Found <strong>{items.length} items</strong> across your uploaded files.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  <div className="rounded-md border overflow-hidden max-h-[400px] overflow-y-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-muted/50 sticky top-0">
+                        <tr className="border-b">
+                          <th className="h-10 px-3 text-left font-medium text-muted-foreground">Name</th>
+                          <th className="h-10 px-3 text-left font-medium text-muted-foreground">Type</th>
+                          <th className="h-10 px-3 text-left font-medium text-muted-foreground">Station</th>
+                          <th className="h-10 px-3 text-left font-medium text-muted-foreground">Source</th>
+                          <th className="h-10 px-3 text-left font-medium text-muted-foreground">Status</th>
+                          <th className="h-10 px-3 w-12"></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {items.map((item) => (
+                          <tr key={item.id} className="border-b hover:bg-muted/50">
+                            <td className="p-2">
+                              <Input
+                                value={item.name}
+                                onChange={(e) => updateItem(item.id, "name", e.target.value)}
+                                className="h-8 min-w-[180px]"
+                              />
+                            </td>
+                            <td className="p-2">
+                              <Select value={item.type} onValueChange={(val: any) => updateItem(item.id, "type", val)}>
+                                <SelectTrigger className="h-8 w-[130px]">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="menu_item">Menu Item</SelectItem>
+                                  <SelectItem value="prep_recipe">Recipe</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </td>
+                            <td className="p-2">
+                              {item.type === "menu_item" ? (
+                                <Select
+                                  value={item.station}
+                                  onValueChange={(val) => updateItem(item.id, "station", val)}
+                                >
+                                  <SelectTrigger className="h-8 w-[100px]">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="grill">Grill</SelectItem>
+                                    <SelectItem value="saute">Sauté</SelectItem>
+                                    <SelectItem value="fry">Fry</SelectItem>
+                                    <SelectItem value="salad">Salad</SelectItem>
+                                    <SelectItem value="line">Line</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              ) : (
+                                <span className="text-muted-foreground text-xs">—</span>
+                              )}
+                            </td>
+                            <td className="p-2 text-xs text-muted-foreground max-w-[120px] truncate" title={item.source_file}>
+                              {item.source_file}
+                            </td>
+                            <td className="p-2">
+                              {item.status === "new" ? (
+                                <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200 text-xs">
+                                  New
+                                </Badge>
+                              ) : (
+                                <Badge variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-200 text-xs flex items-center gap-1">
+                                  <AlertCircle className="w-3 h-3" /> Dup
+                                </Badge>
+                              )}
+                            </td>
+                            <td className="p-2">
+                              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => removeItem(item.id)}>
+                                <X className="h-4 w-4 text-muted-foreground" />
+                              </Button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div className="flex justify-end gap-3 pt-2">
+                    <Button variant="outline" onClick={handleClose}>
+                      Cancel
+                    </Button>
+                    <Button onClick={handleFinalImport} disabled={isProcessing || items.length === 0}>
+                      {isProcessing ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : (
+                        <Check className="mr-2 h-4 w-4" />
+                      )}
+                      Import {items.length} Items
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
