@@ -1,69 +1,125 @@
 
 
-## Make Prep List Items Clickable for Recipe Details
+## Batch Recipe Import - Multiple Files at Once
 
-### Problem Identified
-Looking at the screenshot and code, the prep list items (like "BBQ Combo Platter", "Brisket Platter", etc.) are currently **not clickable**. Only a small BookOpen icon button on the right side opens the recipe modal - and this button only appears when the menu item has a linked recipe.
-
-The user wants the **entire item row to be tappable** to view recipe details.
+### Overview
+Enable importing multiple recipe files simultaneously from the Recipes tab, leveraging the existing batch import infrastructure.
 
 ---
 
-### Solution
+### Current vs. Proposed
 
-Make the entire `PrepListItem` card clickable to trigger the recipe modal, providing a much larger touch target that's kitchen-friendly.
+| Current | Proposed |
+|---------|----------|
+| Single file import only | Drag-and-drop multiple files |
+| One-at-a-time workflow | Batch process all files at once |
+| Basic file picker | Drop zone with progress indicators |
+| No duplicate detection | Duplicate detection across files |
 
 ---
 
-### Implementation
+### Implementation Approach
 
-#### 1. Update PrepListItem Component
+The cleanest solution is to **integrate the UnifiedImportWizard into the Recipes tab** with a recipe-focused mode. This reuses the existing batch infrastructure.
 
-**File:** `src/components/prep/PrepListItem.tsx`
+---
+
+### File Changes
+
+#### 1. Update RecipeManagement Component
+
+**File:** `src/components/admin/RecipeManagement.tsx`
 
 **Changes:**
-- Make the entire card clickable (not just the book icon)
-- Add cursor pointer and hover states
-- Keep the status button separate (clicking it still cycles status)
-- Remove the separate BookOpen button (entire card now does this)
+- Import the `UnifiedImportWizard` component
+- Add state for showing the wizard
+- Add a "Batch Import" button alongside the existing single-file import
+- Pass the wizard a callback to refresh recipes after import
 
-```tsx
-// Before: Card with separate recipe button
-<Card className="flex items-center gap-4...">
-  <button onClick={cycleStatus}>...</button>
-  <div className="flex-1">...</div>
-  {hasRecipe && <Button onClick={onViewRecipe}>...</Button>}
-</Card>
+```typescript
+// New state
+const [showBatchImport, setShowBatchImport] = useState(false);
 
-// After: Clickable card with stopPropagation on status button
-<Card 
-  onClick={onViewRecipe}
-  className="flex items-center gap-4 cursor-pointer hover:bg-accent/50..."
->
-  <button 
-    onClick={(e) => { e.stopPropagation(); cycleStatus(); }}
-  >...</button>
-  <div className="flex-1">...</div>
-  <BookOpen className="h-6 w-6 text-muted-foreground" /> {/* Visual hint */}
-</Card>
+// New button in header (alongside existing Import Recipe button)
+<Button variant="outline" onClick={() => setShowBatchImport(true)}>
+  <FolderUp className="mr-2 h-4 w-4" />
+  Batch Import
+</Button>
+
+// Wizard dialog
+<UnifiedImportWizard
+  open={showBatchImport}
+  onOpenChange={setShowBatchImport}
+  onComplete={fetchRecipes}
+/>
 ```
 
-#### 2. Update PrepDashboard to Handle Missing Recipes
+---
 
-**File:** `src/pages/PrepDashboard.tsx`
+### Alternative: Extend Single-File Import to Multi-File
 
-**Changes:**
-- Pass the `menu_item_id` along with `recipe_id` to the modal
-- Allow opening modal even without a recipe to show "No recipe available" message
+If the user prefers to keep the simpler RecipeImportPreview flow:
 
-#### 3. Update RecipeModal to Handle Missing Recipes
-
-**File:** `src/components/prep/RecipeModal.tsx`
+#### Modify RecipeManagement.tsx
 
 **Changes:**
-- Accept both `recipeId` and optional `menuItemName` props
-- Show a friendly message when no recipe is linked
-- Still display the modal so users get feedback on their click
+- Change file input to accept `multiple` files
+- Process each file through `analyze-document` 
+- Aggregate all parsed recipes into a single preview dialog
+- Show combined list with file source indicators
+
+```typescript
+// Update file input
+<input
+  ref={importInputRef}
+  type="file"
+  accept=".xlsx,.xls,.csv,.pdf"
+  multiple  // <-- Add this
+  onChange={handleImportFileSelect}
+  className="hidden"
+/>
+
+// Update handler to process array of files
+const handleImportFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const files = Array.from(e.target.files || []);
+  // Process each file, aggregate recipes
+  // Show combined preview
+};
+```
+
+---
+
+### Recommended Approach
+
+**Option A (Recommended): Add UnifiedImportWizard button** - Provides the full batch experience with:
+- Drag-and-drop multi-file upload
+- Auto-classification of file types
+- Duplicate detection across files
+- Progress indicators
+- Per-item station/type overrides
+
+**Option B: Extend single-file import** - Lighter change but less powerful:
+- Multi-select in file picker
+- Sequential processing
+- Combined preview
+
+---
+
+### UI Changes (Option A)
+
+The Recipes tab header will have two import options:
+
+```text
+┌────────────────────────────────────────────────────────────────────┐
+│ Recipes                                                            │
+│ Manage recipe cards for your menu items                           │
+│                                                                    │
+│ [📑 Import Recipe]  [📁 Batch Import]  [+ Add Recipe]             │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+- **Import Recipe**: Existing single-file quick import
+- **Batch Import**: Opens UnifiedImportWizard for multi-file drag-and-drop
 
 ---
 
@@ -71,31 +127,20 @@ Make the entire `PrepListItem` card clickable to trigger the recipe modal, provi
 
 | File | Action | Description |
 |------|--------|-------------|
-| `src/components/prep/PrepListItem.tsx` | UPDATE | Make entire card clickable, add hover state, use stopPropagation on status button |
-| `src/pages/PrepDashboard.tsx` | UPDATE | Pass menu item name to modal for "no recipe" state |
-| `src/components/prep/RecipeModal.tsx` | UPDATE | Handle case when no recipe exists, show friendly message |
-
----
-
-### UX Improvements
-
-| Before | After |
-|--------|-------|
-| Only small book icon clickable | Entire card is tappable |
-| No feedback if no recipe | Shows "No recipe available" message |
-| Icon hidden if no recipe | Card always shows book icon hint |
-| Harder to tap on tablets | Kitchen-friendly large touch target |
+| `src/components/admin/RecipeManagement.tsx` | UPDATE | Add UnifiedImportWizard integration with "Batch Import" button |
 
 ---
 
 ### Technical Notes
 
-**Touch Target:**
-- The entire card becomes a 60px+ tall touch target
-- Status button uses `e.stopPropagation()` to prevent opening modal when cycling status
+**Reusing Existing Infrastructure:**
+- The `UnifiedImportWizard` already handles:
+  - Multi-file batch uploads
+  - PDF and Excel parsing
+  - Auto-detection of recipes vs menu items
+  - Duplicate detection against existing database records
+  - Progress indicators and error handling
 
-**Visual Feedback:**
-- `cursor-pointer` added to card
-- `hover:bg-accent/50` provides hover feedback
-- BookOpen icon always visible as a hint that details are available
+**No New Components Needed:**
+- The wizard already supports recipe-only imports (when no menu items are detected, it creates `CombinedItem` entries from recipes)
 
