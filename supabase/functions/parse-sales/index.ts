@@ -1,6 +1,12 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { corsHeaders, jsonResponse, errorResponse, handleAIError } from "../_shared/utils.ts";
 
+type UserContent = string | Array<{
+  type: string;
+  text?: string;
+  image_url?: { url: string };
+}>;
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -52,7 +58,7 @@ Return a JSON object with an "items" array. Each item should have:
 - "original_name": The original item name from the report (for reference)`;
 
     // Build the message content based on file type
-    let userContent: any;
+    let userContent: UserContent;
     if (isBase64 && fileName.toLowerCase().endsWith('.pdf')) {
       userContent = [
         {

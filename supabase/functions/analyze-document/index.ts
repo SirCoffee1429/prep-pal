@@ -18,6 +18,41 @@ interface AnalyzeRequest {
   menuItems?: string[]; // For sales matching
 }
 
+// Types for parsed data from AI
+interface ParsedIngredient {
+  item: string;
+  quantity?: string;
+  measure?: string;
+  unit_cost?: number;
+  total_cost?: number;
+}
+
+interface ParsedMenuItem {
+  name: string;
+  category?: string;
+  menu_price?: number;
+  food_cost?: number;
+  cost_percent?: number;
+  inferred_station?: string;
+}
+
+interface ParsedRecipe {
+  name: string;
+  ingredients?: ParsedIngredient[];
+  method?: string;
+  recipe_cost?: number;
+  portion_cost?: number;
+  menu_price?: number;
+  food_cost_percent?: number;
+  inferred_station?: string;
+}
+
+type UserContent = string | Array<{
+  type: string;
+  text?: string;
+  image_url?: { url: string };
+}>;
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -150,7 +185,7 @@ STATION INFERENCE RULES:
 - Sauces/Sides/Other → "line"`;
 
     // Build message content based on file type
-    let userContent: any;
+    let userContent: UserContent;
     if (isPDF) {
       userContent = [
         {
@@ -226,19 +261,19 @@ STATION INFERENCE RULES:
 
     // Enrich with station inference for menu_item and recipe types
     if (parsedData.type === "menu_item" && parsedData.data.menu_items) {
-      parsedData.data.menu_items = parsedData.data.menu_items.map((item: any) => ({
+      parsedData.data.menu_items = parsedData.data.menu_items.map((item: ParsedMenuItem) => ({
         ...item,
         inferred_station: item.inferred_station || inferStation(item.name, item.category),
       }));
     }
 
     if (parsedData.type === "recipe" && parsedData.data.recipes) {
-      parsedData.data.recipes = parsedData.data.recipes.map((recipe: any) => ({
+      parsedData.data.recipes = parsedData.data.recipes.map((recipe: ParsedRecipe) => ({
         ...recipe,
         inferred_station: recipe.inferred_station || inferStation(
           recipe.name,
           undefined,
-          recipe.ingredients?.map((i: any) => i.item)
+          recipe.ingredients?.map((i: ParsedIngredient) => i.item)
         ),
       }));
     }

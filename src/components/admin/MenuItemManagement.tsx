@@ -28,7 +28,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { Plus, Pencil, Trash2, Loader2, Upload, FileStack } from "lucide-react";
-import * as XLSX from "xlsx";
+import { parseExcelFile } from "@/lib/excelParser";
 import type { Database } from "@/integrations/supabase/types";
 import MenuItemImportPreview, { ParsedMenuItem } from "./MenuItemImportPreview";
 import UnifiedImportWizard from "./UnifiedImportWizard";
@@ -196,16 +196,6 @@ const MenuItemManagement = () => {
   };
 
   // === Import Functions ===
-  const extractTextFromWorkbook = (workbook: XLSX.WorkBook): string => {
-    const allSheetText: string[] = [];
-    workbook.SheetNames.forEach((sheetName) => {
-      const worksheet = workbook.Sheets[sheetName];
-      const csv = XLSX.utils.sheet_to_csv(worksheet, { blankrows: false });
-      allSheetText.push(`=== Sheet: ${sheetName} ===\n${csv}`);
-    });
-    return allSheetText.join("\n\n");
-  };
-
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
@@ -215,9 +205,10 @@ const MenuItemManagement = () => {
 
     try {
       for (const file of Array.from(files)) {
-        const arrayBuffer = await file.arrayBuffer();
-        const workbook = XLSX.read(arrayBuffer, { type: "array" });
-        const fileContent = extractTextFromWorkbook(workbook);
+        const { sheetNames, sheets } = await parseExcelFile(file);
+        const fileContent = sheetNames
+          .map((name) => `=== Sheet: ${name} ===\n${sheets[name]}`)
+          .join("\n\n");
 
         const response = await supabase.functions.invoke("analyze-document", {
           body: { fileContent, fileName: file.name, mimeType: "text/csv" },

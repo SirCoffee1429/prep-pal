@@ -21,7 +21,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { Loader2, Upload, FileSpreadsheet, Check, AlertCircle } from "lucide-react";
 import { findBestMatch, getConfidenceColor, getConfidenceLabel, MatchResult } from "@/lib/itemMatching";
-import * as XLSX from "xlsx";
+import { parseExcelFromBuffer } from "@/lib/excelParser";
 
 interface MenuItem {
   id: string;
@@ -110,29 +110,17 @@ const ParSheetImportDialog = ({
         reader.readAsDataURL(file);
       });
     } else if (fileName.endsWith(".xlsx") || fileName.endsWith(".xls")) {
-      // Parse Excel to text
-      return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          try {
-            const data = new Uint8Array(e.target?.result as ArrayBuffer);
-            const workbook = XLSX.read(data, { type: "array" });
-            let textContent = "";
-            
-            workbook.SheetNames.forEach((sheetName) => {
-              const sheet = workbook.Sheets[sheetName];
-              textContent += `Sheet: ${sheetName}\n`;
-              textContent += XLSX.utils.sheet_to_csv(sheet) + "\n\n";
-            });
-            
-            resolve({ content: textContent, isBase64: false });
-          } catch (err) {
-            reject(err);
-          }
-        };
-        reader.onerror = reject;
-        reader.readAsArrayBuffer(file);
-      });
+      // Parse Excel to text using exceljs
+      const arrayBuffer = await file.arrayBuffer();
+      const { sheetNames, sheets } = await parseExcelFromBuffer(arrayBuffer);
+      let textContent = "";
+      
+      for (const sheetName of sheetNames) {
+        textContent += `Sheet: ${sheetName}\n`;
+        textContent += sheets[sheetName] + "\n\n";
+      }
+      
+      return { content: textContent, isBase64: false };
     } else if (fileName.endsWith(".csv")) {
       // Read as text
       return new Promise((resolve, reject) => {

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import * as XLSX from "xlsx";
+import { parseExcelFromBuffer } from "@/lib/excelParser";
 import { Upload, FileUp, Check, X, Loader2, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -13,6 +13,25 @@ import type { Database } from "@/integrations/supabase/types";
 
 type KitchenStation = Database["public"]["Enums"]["kitchen_station"];
 
+// Type for ingredient structure in parsed items
+interface ParsedApiIngredient {
+  item: string;
+  quantity?: string;
+  measure?: string;
+  unit_cost?: number;
+  total_cost?: number;
+}
+
+// Type for parsed item from API response
+interface ParsedApiItem {
+  name?: string;
+  station?: string;
+  ingredients?: ParsedApiIngredient[];
+  method?: string;
+  recipe_cost?: number;
+  portion_cost?: number;
+}
+
 interface ParsedItem {
   id: string;
   name: string;
@@ -20,7 +39,7 @@ interface ParsedItem {
   station: KitchenStation;
   status: "new" | "duplicate_menu" | "duplicate_recipe";
   existing_id?: string;
-  original_data: any;
+  original_data: ParsedApiItem;
   source_file: string;
 }
 
@@ -74,7 +93,7 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
             console.error(`Error parsing PDF ${file.name}:`, error);
           } else {
             if (data?.data?.menu_items && Array.isArray(data.data.menu_items)) {
-              const pdfItems: ParsedItem[] = data.data.menu_items.map((item: any, idx: number) => ({
+              const pdfItems: ParsedItem[] = data.data.menu_items.map((item: ParsedApiItem, idx: number) => ({
                 id: `${file.name}-${idx}`,
                 name: item.name || "Unknown",
                 type: "menu_item" as const,
@@ -87,7 +106,7 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
             }
 
             if (data?.data?.recipes && Array.isArray(data.data.recipes)) {
-              const recipeItems: ParsedItem[] = data.data.recipes.map((item: any, idx: number) => ({
+              const recipeItems: ParsedItem[] = data.data.recipes.map((item: ParsedApiItem, idx: number) => ({
                 id: `${file.name}-recipe-${idx}`,
                 name: item.name || "Unknown Recipe",
                 type: "prep_recipe" as const,
@@ -102,11 +121,10 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
           processedCount++;
         } else if (file.name.endsWith(".xlsx") || file.name.endsWith(".xls")) {
           const arrayBuffer = await file.arrayBuffer();
-          const workbook = XLSX.read(arrayBuffer);
+          const { sheetNames, sheets } = await parseExcelFromBuffer(arrayBuffer);
 
-          for (const sheetName of workbook.SheetNames) {
-            const worksheet = workbook.Sheets[sheetName];
-            const csv = XLSX.utils.sheet_to_csv(worksheet);
+          for (const sheetName of sheetNames) {
+            const csv = sheets[sheetName];
 
             if (!csv.trim()) continue;
 
@@ -124,7 +142,7 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
             }
 
             if (data?.data?.menu_items && Array.isArray(data.data.menu_items)) {
-              const sheetItems: ParsedItem[] = data.data.menu_items.map((item: any, idx: number) => ({
+              const sheetItems: ParsedItem[] = data.data.menu_items.map((item: ParsedApiItem, idx: number) => ({
                 id: `${file.name}-${sheetName}-${idx}`,
                 name: item.name || "Unknown",
                 type: "menu_item" as const,
@@ -137,7 +155,7 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
             }
 
             if (data?.data?.recipes && Array.isArray(data.data.recipes)) {
-              const recipeItems: ParsedItem[] = data.data.recipes.map((item: any, idx: number) => ({
+              const recipeItems: ParsedItem[] = data.data.recipes.map((item: ParsedApiItem, idx: number) => ({
                 id: `${file.name}-${sheetName}-recipe-${idx}`,
                 name: item.name || "Unknown Recipe",
                 type: "prep_recipe" as const,
@@ -158,7 +176,7 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
           });
 
           if (!error && data?.data?.menu_items) {
-            const fileItems: ParsedItem[] = data.data.menu_items.map((item: any, idx: number) => ({
+            const fileItems: ParsedItem[] = data.data.menu_items.map((item: ParsedApiItem, idx: number) => ({
               id: `${file.name}-${idx}`,
               name: item.name || "Unknown",
               type: "menu_item" as const,
@@ -171,7 +189,7 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
           }
 
           if (!error && data?.data?.recipes) {
-            const recipeItems: ParsedItem[] = data.data.recipes.map((item: any, idx: number) => ({
+            const recipeItems: ParsedItem[] = data.data.recipes.map((item: ParsedApiItem, idx: number) => ({
               id: `${file.name}-recipe-${idx}`,
               name: item.name || "Unknown Recipe",
               type: "prep_recipe" as const,
@@ -327,7 +345,7 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
                               />
                             </td>
                             <td className="p-2">
-                              <Select value={item.type} onValueChange={(val: any) => updateItem(item.id, "type", val)}>
+                              <Select value={item.type} onValueChange={(val: string) => updateItem(item.id, "type", val)}>
                                 <SelectTrigger className="h-8 w-[130px]">
                                   <SelectValue />
                                 </SelectTrigger>
