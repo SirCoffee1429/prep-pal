@@ -187,6 +187,16 @@ const ParSheetImportDialog = ({
         return;
       }
 
+      // Check if menu items exist before proceeding to review
+      if (menuItems.length === 0) {
+        toast({
+          title: "No Menu Items Available",
+          description: "Please import menu items first before importing par levels.",
+          variant: "destructive",
+        });
+        return;
+      }
+
       // Match items and prepare for review
       const reviews: ReviewItem[] = parsedItems.map((item) => {
         const matchResult = findBestMatch(item.name, menuItems);
