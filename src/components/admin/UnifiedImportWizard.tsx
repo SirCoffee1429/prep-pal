@@ -54,7 +54,53 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
 
-        if (file.name.endsWith(".xlsx") || file.name.endsWith(".xls")) {
+        if (file.name.toLowerCase().endsWith(".pdf")) {
+          // Convert PDF to Base64 for vision AI processing
+          const arrayBuffer = await file.arrayBuffer();
+          const bytes = new Uint8Array(arrayBuffer);
+          let binary = "";
+          bytes.forEach((b) => (binary += String.fromCharCode(b)));
+          const base64Content = btoa(binary);
+
+          const { data, error } = await supabase.functions.invoke("analyze-document", {
+            body: {
+              fileContent: base64Content,
+              fileName: file.name,
+              mimeType: "application/pdf",
+            },
+          });
+
+          if (error) {
+            console.error(`Error parsing PDF ${file.name}:`, error);
+          } else {
+            if (data?.data?.menu_items && Array.isArray(data.data.menu_items)) {
+              const pdfItems: ParsedItem[] = data.data.menu_items.map((item: any, idx: number) => ({
+                id: `${file.name}-${idx}`,
+                name: item.name || "Unknown",
+                type: "menu_item" as const,
+                station: (item.station?.toLowerCase() as KitchenStation) || "grill",
+                status: "new" as const,
+                original_data: item,
+                source_file: file.name,
+              }));
+              allParsedItems.push(...pdfItems);
+            }
+
+            if (data?.data?.recipes && Array.isArray(data.data.recipes)) {
+              const recipeItems: ParsedItem[] = data.data.recipes.map((item: any, idx: number) => ({
+                id: `${file.name}-recipe-${idx}`,
+                name: item.name || "Unknown Recipe",
+                type: "prep_recipe" as const,
+                station: "grill" as KitchenStation,
+                status: "new" as const,
+                original_data: item,
+                source_file: file.name,
+              }));
+              allParsedItems.push(...recipeItems);
+            }
+          }
+          processedCount++;
+        } else if (file.name.endsWith(".xlsx") || file.name.endsWith(".xls")) {
           const arrayBuffer = await file.arrayBuffer();
           const workbook = XLSX.read(arrayBuffer);
 
@@ -231,12 +277,12 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
                       </div>
                       <div className="space-y-1">
                         <h3 className="font-semibold text-lg">Drag & drop files here</h3>
-                        <p className="text-sm text-muted-foreground">Supports multiple .xlsx, .xls, or .csv files</p>
+                        <p className="text-sm text-muted-foreground">Supports Excel, CSV, and PDF files</p>
                       </div>
                       <Input
                         type="file"
                         multiple
-                        accept=".csv,.xlsx,.xls"
+                        accept=".csv,.xlsx,.xls,.pdf"
                         className="max-w-xs cursor-pointer"
                         onChange={handleFileUpload}
                       />
