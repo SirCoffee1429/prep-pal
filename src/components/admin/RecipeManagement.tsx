@@ -22,7 +22,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { Plus, Pencil, Trash2, Loader2, Upload, Eye, FileSpreadsheet, FolderUp } from "lucide-react";
-import * as XLSX from "xlsx";
+import { parseExcelToText } from "@/lib/excelParser";
 import RecipeImportPreview, { ParsedRecipe, ParsedIngredient } from "./RecipeImportPreview";
 import UnifiedImportWizard from "./UnifiedImportWizard";
 
@@ -167,32 +167,6 @@ const RecipeManagement = () => {
     if (ingredients.length > 1) {
       setIngredients(ingredients.filter((_, i) => i !== index));
     }
-  };
-
-  // Excel import functions
-  const parseExcelToText = (file: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        try {
-          const data = new Uint8Array(e.target?.result as ArrayBuffer);
-          const workbook = XLSX.read(data, { type: "array" });
-          
-          let allText = "";
-          workbook.SheetNames.forEach((sheetName) => {
-            const worksheet = workbook.Sheets[sheetName];
-            const sheetText = XLSX.utils.sheet_to_csv(worksheet);
-            allText += `\n=== Sheet: ${sheetName} ===\n${sheetText}\n`;
-          });
-          
-          resolve(allText);
-        } catch (error) {
-          reject(error);
-        }
-      };
-      reader.onerror = () => reject(reader.error);
-      reader.readAsArrayBuffer(file);
-    });
   };
 
   const handleImportClick = () => {

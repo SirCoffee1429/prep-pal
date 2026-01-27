@@ -1,5 +1,5 @@
 import { useState } from "react";
-import * as XLSX from "xlsx";
+import { parseExcelFromBuffer } from "@/lib/excelParser";
 import { Upload, FileUp, Check, X, Loader2, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -121,11 +121,10 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
           processedCount++;
         } else if (file.name.endsWith(".xlsx") || file.name.endsWith(".xls")) {
           const arrayBuffer = await file.arrayBuffer();
-          const workbook = XLSX.read(arrayBuffer);
+          const { sheetNames, sheets } = await parseExcelFromBuffer(arrayBuffer);
 
-          for (const sheetName of workbook.SheetNames) {
-            const worksheet = workbook.Sheets[sheetName];
-            const csv = XLSX.utils.sheet_to_csv(worksheet);
+          for (const sheetName of sheetNames) {
+            const csv = sheets[sheetName];
 
             if (!csv.trim()) continue;
 
