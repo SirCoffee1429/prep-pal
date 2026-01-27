@@ -13,11 +13,20 @@ import type { Database } from "@/integrations/supabase/types";
 
 type KitchenStation = Database["public"]["Enums"]["kitchen_station"];
 
+// Type for ingredient structure in parsed items
+interface ParsedApiIngredient {
+  item: string;
+  quantity?: string;
+  measure?: string;
+  unit_cost?: number;
+  total_cost?: number;
+}
+
 // Type for parsed item from API response
 interface ParsedApiItem {
   name?: string;
   station?: string;
-  ingredients?: unknown;
+  ingredients?: ParsedApiIngredient[];
   method?: string;
   recipe_cost?: number;
   portion_cost?: number;
