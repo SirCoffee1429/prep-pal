@@ -1,79 +1,110 @@
 
 
-## Fix Par Sheet Import - Empty Dropdown Issue
+## Add PDF Support to Unified Import Wizard
 
-### Root Cause Identified
-
-After investigating, the issue is **not a code bug** but a **data problem**:
-
-| Check | Result |
-|-------|--------|
-| Database query for `menu_items` | Returns `[]` (empty) |
-| Network requests in context | `menu_items?is_active=eq.true` returns `[]` |
-| Par Sheet Import behavior | Cannot match items to an empty database |
-
-**The `menu_items` table is currently empty.** This causes:
-- Empty "Select item" dropdown (no items to list)
-- Unresponsive checkboxes (disabled when no match possible)
-- No scrollable content (nothing to display)
+### Overview
+The backend `analyze-document` edge function already supports PDF files with vision-based AI processing. The frontend `UnifiedImportWizard` needs to be updated to accept and properly handle PDF uploads.
 
 ---
 
-### Why This Happened
+### Current vs. Proposed
 
-The memory notes mention "65+ master menu items" were previously imported, but the current database shows zero items. The data may have been:
-- Deleted during testing
-- Reset/cleared
-- Not yet imported in the current environment
-
----
-
-### Solution
-
-**Step 1: Re-import Menu Items First**
-
-Before par sheet import will work, menu items need to exist in the database. The user should:
-
-1. Go to **Menu Items** tab in the Admin Dashboard
-2. Use **Batch Import** or manually add menu items
-3. Import from a POS Item Sales report or master menu workbook
-
-**Step 2: Then Import Par Sheet**
-
-Once menu items exist, the par sheet import will:
-- Populate the "Select item" dropdown with available items
-- Enable fuzzy matching to auto-detect matches
-- Allow selecting/deselecting items with checkboxes
+| Current | Proposed |
+|---------|----------|
+| File input accepts: `.csv,.xlsx,.xls` | File input accepts: `.csv,.xlsx,.xls,.pdf` |
+| PDF files rejected by browser | PDF files accepted and processed |
+| Only text-based parsing | PDF converted to Base64 for vision AI |
 
 ---
 
-### UX Improvement (Code Change)
+### File Changes
 
-To prevent confusion in the future, the Par Sheet Import should show a clear message when no menu items exist:
+#### Update UnifiedImportWizard Component
 
-**File:** `src/components/admin/ParSheetImportDialog.tsx`
+**File:** `src/components/admin/UnifiedImportWizard.tsx`
 
-**Change:** Add a check after parsing that warns if the dropdown would be empty:
+**Changes:**
 
+1. **Update file input accept attribute** (line 239):
 ```typescript
-// After parsing and matching, check if menuItems is empty
-if (menuItems.length === 0) {
-  toast({
-    title: "No Menu Items Available",
-    description: "Please import menu items first before importing par levels.",
-    variant: "destructive",
+// Before
+accept=".csv,.xlsx,.xls"
+
+// After
+accept=".csv,.xlsx,.xls,.pdf"
+```
+
+2. **Update help text** (line 234):
+```typescript
+// Before
+<p>Supports multiple .xlsx, .xls, or .csv files</p>
+
+// After
+<p>Supports Excel, CSV, and PDF files</p>
+```
+
+3. **Add PDF handling branch in file processing** (around line 57):
+```typescript
+// Add new condition for PDF files
+if (file.name.toLowerCase().endsWith(".pdf")) {
+  // Convert PDF to Base64 (strip data URL prefix)
+  const arrayBuffer = await file.arrayBuffer();
+  const bytes = new Uint8Array(arrayBuffer);
+  let binary = "";
+  bytes.forEach((b) => (binary += String.fromCharCode(b)));
+  const base64Content = btoa(binary);
+
+  // Send to analyze-document with PDF mimeType
+  const { data, error } = await supabase.functions.invoke("analyze-document", {
+    body: {
+      fileContent: base64Content,
+      fileName: file.name,
+      mimeType: "application/pdf",
+    },
   });
-  return;
+
+  // Process response (menu_items and recipes)
+  if (!error && data?.data?.menu_items) {
+    // Map to ParsedItem[]
+  }
+  if (!error && data?.data?.recipes) {
+    // Map to ParsedItem[]
+  }
+  processedCount++;
 }
 ```
 
-Also add an empty state message in the review step when there are no matches due to empty menu items.
-
 ---
 
-### Immediate Action Required
+### Technical Flow
 
-The user needs to import menu items before continuing. The data layer is working correctly - it's just empty.
+```text
+User drops PDF file
+       │
+       ▼
+┌──────────────────────────┐
+│ Convert to ArrayBuffer   │
+│ → Uint8Array → Base64    │
+└──────────────────────────┘
+       │
+       ▼
+┌──────────────────────────┐
+│ Call analyze-document    │
+│ mimeType: application/pdf│
+└──────────────────────────┘
+       │
+       ▼
+┌──────────────────────────┐
+│ Edge function uses       │
+│ gemini-2.5-pro (vision)  │
+└──────────────────────────┘
+       │
+       ▼
+┌──────────────────────────┐
+│ Return parsed items      │
+│ (recipes/menu_items)     │
+└──────────────────────────┘
+```
 
 ---
 
@@ -81,21 +112,16 @@ The user needs to import menu items before continuing. The data layer is working
 
 | File | Action | Description |
 |------|--------|-------------|
-| `src/components/admin/ParSheetImportDialog.tsx` | UPDATE | Add early warning when `menuItems` is empty, prevent confusing review state |
+| `src/components/admin/UnifiedImportWizard.tsx` | UPDATE | Add `.pdf` to accept attribute, add PDF→Base64 conversion logic, update help text |
 
 ---
 
-### Technical Notes
+### Why This Works
 
-**Data Dependencies:**
+The `analyze-document` edge function already handles PDFs:
+- Line 40-41: Detects PDF by mimeType and selects `gemini-2.5-pro`
+- Line 154-166: Constructs vision-compatible message with Base64 image data
+- The AI model extracts text and structure from PDF images
 
-```text
-Par Sheet Import requires:
-  └── menu_items (must exist first)
-       └── Used for fuzzy matching item names
-       └── Populates the "Select item" dropdown
-       └── Required for par_levels foreign key
-```
-
-**The dropdowns are functioning correctly** - they're just rendering empty arrays because there's no data.
+The only missing piece was the frontend accepting and encoding PDFs correctly.
 
