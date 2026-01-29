@@ -1,8 +1,8 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { corsHeaders, jsonResponse, errorResponse, handleAIError, inferStation } from "../_shared/utils.ts";
+import { corsHeaders, jsonResponse, errorResponse, inferStation } from "../_shared/utils.ts";
 
 /**
- * Unified document analyzer with hybrid model selection
+ * Unified document analyzer using Google Gemini API directly
  * - PDFs: Uses gemini-2.5-pro for vision/layout understanding
  * - Text (CSV/Excel): Uses gemini-2.5-flash for speed and cost efficiency
  * 
@@ -30,15 +30,15 @@ serve(async (req) => {
       return errorResponse("No file content provided", 400);
     }
 
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) {
-      console.error("LOVABLE_API_KEY not configured");
+    const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
+    if (!GEMINI_API_KEY) {
+      console.error("GEMINI_API_KEY not configured");
       return errorResponse("AI service not configured", 500);
     }
 
     // Hybrid model selection based on file type
     const isPDF = mimeType === "application/pdf";
-    const model = isPDF ? "google/gemini-2.5-pro" : "google/gemini-2.5-flash";
+    const model = isPDF ? "gemini-2.5-pro-preview-05-06" : "gemini-2.5-flash-preview-05-20";
     
     console.log(`Processing ${fileName || "document"} with ${model} (mimeType: ${mimeType})`);
 
@@ -149,60 +149,77 @@ STATION INFERENCE RULES:
 - Steak/Burger/Grilled/Salmon → "grill"
 - Sauces/Sides/Other → "line"`;
 
-    // Build message content based on file type
-    let userContent: any;
+    // Build request body based on file type
+    let requestBody: any;
+    
     if (isPDF) {
-      userContent = [
-        {
-          type: "text",
-          text: `Analyze this document (${fileName || "document.pdf"}) and extract the data.`,
-        },
-        {
-          type: "image_url",
-          image_url: {
-            url: `data:application/pdf;base64,${fileContent}`,
-          },
-        },
-      ];
+      // For PDFs, use vision with inline data
+      requestBody = {
+        contents: [{
+          role: "user",
+          parts: [
+            { text: `${systemPrompt}\n\nAnalyze this document (${fileName || "document.pdf"}) and extract the data.` },
+            { inlineData: { mimeType: "application/pdf", data: fileContent } }
+          ]
+        }],
+        generationConfig: {
+          responseMimeType: "application/json",
+          temperature: 0.1
+        }
+      };
     } else {
-      userContent = `Analyze this document (${fileName || "document.csv"}):\n\n${fileContent}`;
+      // For text content (CSV/Excel extracted text)
+      requestBody = {
+        contents: [{
+          role: "user",
+          parts: [
+            { text: `${systemPrompt}\n\nAnalyze this document (${fileName || "document.csv"}):\n\n${fileContent}` }
+          ]
+        }],
+        generationConfig: {
+          responseMimeType: "application/json",
+          temperature: 0.1
+        }
+      };
     }
 
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userContent },
-        ],
-        response_format: { type: "json_object" },
-        temperature: 0.1,
-      }),
-    });
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(requestBody),
+      }
+    );
 
     if (!response.ok) {
       const errorText = await response.text();
-      return handleAIError(response.status, errorText);
+      console.error("Gemini API error:", response.status, errorText);
+      
+      if (response.status === 429) {
+        return errorResponse("Rate limit exceeded. Please try again in a moment.", 429);
+      }
+      if (response.status === 400) {
+        return errorResponse("Invalid request to AI service.", 400);
+      }
+      
+      return errorResponse("Failed to process with AI", 500);
     }
 
     const aiResponse = await response.json();
     
-    // Check for AI-specific errors in response body
+    // Check for API-specific errors in response body
     if (aiResponse.error) {
-      const errorCode = aiResponse.error?.code;
-      if (errorCode === 524) {
-        return errorResponse("AI request timed out. Try uploading a smaller file.", 504);
-      }
-      throw new Error(`AI error: ${JSON.stringify(aiResponse.error)}`);
+      console.error("Gemini API error in response:", aiResponse.error);
+      return errorResponse(`AI error: ${aiResponse.error.message || "Unknown error"}`, 500);
     }
 
-    const content = aiResponse.choices?.[0]?.message?.content;
+    // Extract content from Gemini response format
+    const content = aiResponse.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!content) {
+      console.error("No content in Gemini response:", JSON.stringify(aiResponse));
       throw new Error("AI did not return any content");
     }
 
