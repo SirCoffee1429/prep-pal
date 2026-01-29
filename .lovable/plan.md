@@ -1,110 +1,103 @@
 
 
-## Add PDF Support to Unified Import Wizard
+## Switch from Lovable AI Gateway to Google Gemini API Directly
 
-### Overview
-The backend `analyze-document` edge function already supports PDF files with vision-based AI processing. The frontend `UnifiedImportWizard` needs to be updated to accept and properly handle PDF uploads.
-
----
-
-### Current vs. Proposed
+### Current State vs. Proposed
 
 | Current | Proposed |
 |---------|----------|
-| File input accepts: `.csv,.xlsx,.xls` | File input accepts: `.csv,.xlsx,.xls,.pdf` |
-| PDF files rejected by browser | PDF files accepted and processed |
-| Only text-based parsing | PDF converted to Base64 for vision AI |
+| Uses `LOVABLE_API_KEY` | Uses `GEMINI_API_KEY` |
+| Gateway: `ai.gateway.lovable.dev` | Direct: `generativelanguage.googleapis.com` |
+| Subject to Lovable credit limits | Uses your own Google API quota |
+| 402 errors when credits exhausted | Independent billing via Google Cloud |
 
 ---
 
-### File Changes
+### Edge Functions to Update
 
-#### Update UnifiedImportWizard Component
+Two edge functions currently use the Lovable AI Gateway:
 
-**File:** `src/components/admin/UnifiedImportWizard.tsx`
+1. **`supabase/functions/analyze-document/index.ts`** - Unified document parser (PDF/CSV/Excel)
+2. **`supabase/functions/parse-sales/index.ts`** - Sales report parser
 
-**Changes:**
+---
 
-1. **Update file input accept attribute** (line 239):
+### Technical Changes
+
+#### 1. Update `analyze-document/index.ts`
+
+**Change API key reference:**
 ```typescript
 // Before
-accept=".csv,.xlsx,.xls"
+const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
 
 // After
-accept=".csv,.xlsx,.xls,.pdf"
+const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
+if (!GEMINI_API_KEY) {
+  return errorResponse("GEMINI_API_KEY not configured", 500);
+}
 ```
 
-2. **Update help text** (line 234):
+**Change endpoint and model names:**
 ```typescript
 // Before
-<p>Supports multiple .xlsx, .xls, or .csv files</p>
+const model = isPDF ? "google/gemini-2.5-pro" : "google/gemini-2.5-flash";
+await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+  headers: { Authorization: `Bearer ${LOVABLE_API_KEY}` },
+  body: JSON.stringify({ model, ... })
+});
 
 // After
-<p>Supports Excel, CSV, and PDF files</p>
+const model = isPDF ? "gemini-2.5-pro-preview-05-06" : "gemini-2.5-flash-preview-05-20";
+await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`, {
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    contents: [...],
+    generationConfig: { responseMimeType: "application/json" }
+  })
+});
 ```
 
-3. **Add PDF handling branch in file processing** (around line 57):
+**Update request body format** (Google API uses different structure):
 ```typescript
-// Add new condition for PDF files
-if (file.name.toLowerCase().endsWith(".pdf")) {
-  // Convert PDF to Base64 (strip data URL prefix)
-  const arrayBuffer = await file.arrayBuffer();
-  const bytes = new Uint8Array(arrayBuffer);
-  let binary = "";
-  bytes.forEach((b) => (binary += String.fromCharCode(b)));
-  const base64Content = btoa(binary);
-
-  // Send to analyze-document with PDF mimeType
-  const { data, error } = await supabase.functions.invoke("analyze-document", {
-    body: {
-      fileContent: base64Content,
-      fileName: file.name,
-      mimeType: "application/pdf",
-    },
-  });
-
-  // Process response (menu_items and recipes)
-  if (!error && data?.data?.menu_items) {
-    // Map to ParsedItem[]
+// Google Gemini API format
+{
+  contents: [
+    { role: "user", parts: [{ text: systemPrompt + "\n\n" + userContent }] }
+  ],
+  generationConfig: {
+    responseMimeType: "application/json",
+    temperature: 0.1
   }
-  if (!error && data?.data?.recipes) {
-    // Map to ParsedItem[]
-  }
-  processedCount++;
+}
+
+// For PDFs with vision:
+{
+  contents: [{
+    role: "user",
+    parts: [
+      { text: "Analyze this document..." },
+      { inlineData: { mimeType: "application/pdf", data: base64Content } }
+    ]
+  }]
 }
 ```
 
 ---
 
-### Technical Flow
+#### 2. Update `parse-sales/index.ts`
 
-```text
-User drops PDF file
-       │
-       ▼
-┌──────────────────────────┐
-│ Convert to ArrayBuffer   │
-│ → Uint8Array → Base64    │
-└──────────────────────────┘
-       │
-       ▼
-┌──────────────────────────┐
-│ Call analyze-document    │
-│ mimeType: application/pdf│
-└──────────────────────────┘
-       │
-       ▼
-┌──────────────────────────┐
-│ Edge function uses       │
-│ gemini-2.5-pro (vision)  │
-└──────────────────────────┘
-       │
-       ▼
-┌──────────────────────────┐
-│ Return parsed items      │
-│ (recipes/menu_items)     │
-└──────────────────────────┘
-```
+Same pattern - switch from `LOVABLE_API_KEY` to `GEMINI_API_KEY` and update the API endpoint/format.
+
+---
+
+### Google Gemini Model Mapping
+
+| Lovable Gateway Model | Direct Google API Model |
+|----------------------|-------------------------|
+| `google/gemini-2.5-pro` | `gemini-2.5-pro-preview-05-06` |
+| `google/gemini-2.5-flash` | `gemini-2.5-flash-preview-05-20` |
+| `google/gemini-3-flash-preview` | `gemini-2.5-flash-preview-05-20` |
 
 ---
 
@@ -112,16 +105,15 @@ User drops PDF file
 
 | File | Action | Description |
 |------|--------|-------------|
-| `src/components/admin/UnifiedImportWizard.tsx` | UPDATE | Add `.pdf` to accept attribute, add PDF→Base64 conversion logic, update help text |
+| `supabase/functions/analyze-document/index.ts` | UPDATE | Switch to Google Gemini API directly using `GEMINI_API_KEY` |
+| `supabase/functions/parse-sales/index.ts` | UPDATE | Switch to Google Gemini API directly using `GEMINI_API_KEY` |
 
 ---
 
-### Why This Works
+### Benefits
 
-The `analyze-document` edge function already handles PDFs:
-- Line 40-41: Detects PDF by mimeType and selects `gemini-2.5-pro`
-- Line 154-166: Constructs vision-compatible message with Base64 image data
-- The AI model extracts text and structure from PDF images
-
-The only missing piece was the frontend accepting and encoding PDFs correctly.
+- No more 402 "credits exhausted" errors from Lovable
+- Use your own Google Cloud billing/quota
+- Direct control over API costs
+- Same Gemini models, just accessed directly
 
