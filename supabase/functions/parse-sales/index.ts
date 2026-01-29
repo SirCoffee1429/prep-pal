@@ -1,5 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { corsHeaders, jsonResponse, errorResponse, handleAIError } from "../_shared/utils.ts";
+import { corsHeaders, jsonResponse, errorResponse } from "../_shared/utils.ts";
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -8,10 +8,10 @@ serve(async (req) => {
 
   try {
     const { fileContent, fileName, menuItems, isBase64 } = await req.json();
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+    const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
 
-    if (!LOVABLE_API_KEY) {
-      throw new Error("LOVABLE_API_KEY is not configured");
+    if (!GEMINI_API_KEY) {
+      throw new Error("GEMINI_API_KEY is not configured");
     }
 
     const systemPrompt = `You are a sales data parser for The Club at Old Hawthorne kitchen.
@@ -51,52 +51,85 @@ Return a JSON object with an "items" array. Each item should have:
 - "quantity": The number sold (as an integer)
 - "original_name": The original item name from the report (for reference)`;
 
-    // Build the message content based on file type
-    let userContent: any;
+    // Build request body based on file type
+    let requestBody: any;
+    
     if (isBase64 && fileName.toLowerCase().endsWith('.pdf')) {
-      userContent = [
-        {
-          type: "text",
-          text: `Parse this sales report (${fileName}) and extract all menu items with their quantities sold.`
-        },
-        {
-          type: "image_url",
-          image_url: {
-            url: `data:application/pdf;base64,${fileContent}`
-          }
+      // For PDFs, use vision with inline data
+      requestBody = {
+        contents: [{
+          role: "user",
+          parts: [
+            { text: `${systemPrompt}\n\nParse this sales report (${fileName}) and extract all menu items with their quantities sold.` },
+            { inlineData: { mimeType: "application/pdf", data: fileContent } }
+          ]
+        }],
+        generationConfig: {
+          responseMimeType: "application/json",
+          temperature: 0.1
         }
-      ];
+      };
     } else {
-      userContent = `Parse this sales report (${fileName}):\n\n${fileContent}`;
+      // For text content
+      requestBody = {
+        contents: [{
+          role: "user",
+          parts: [
+            { text: `${systemPrompt}\n\nParse this sales report (${fileName}):\n\n${fileContent}` }
+          ]
+        }],
+        generationConfig: {
+          responseMimeType: "application/json",
+          temperature: 0.1
+        }
+      };
     }
 
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-3-flash-preview",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userContent },
-        ],
-        response_format: { type: "json_object" },
-      }),
-    });
+    // Use gemini-2.5-flash for sales parsing (fast and cost-effective)
+    const model = "gemini-2.5-flash-preview-05-20";
+    
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(requestBody),
+      }
+    );
 
     if (!response.ok) {
       const errorText = await response.text();
-      return handleAIError(response.status, errorText);
+      console.error("Gemini API error:", response.status, errorText);
+      
+      if (response.status === 429) {
+        return errorResponse("Rate limit exceeded. Please try again in a moment.", 429);
+      }
+      if (response.status === 400) {
+        return errorResponse("Invalid request to AI service.", 400);
+      }
+      
+      return errorResponse("Failed to process with AI", 500);
     }
 
     const data = await response.json();
-    const content = data.choices?.[0]?.message?.content;
+    
+    // Check for API-specific errors
+    if (data.error) {
+      console.error("Gemini API error in response:", data.error);
+      return errorResponse(`AI error: ${data.error.message || "Unknown error"}`, 500);
+    }
+
+    // Extract content from Gemini response format
+    const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
 
     let parsed;
     try {
-      parsed = JSON.parse(content);
+      // Handle potential markdown code blocks
+      const jsonMatch = content?.match(/```(?:json)?\s*([\s\S]*?)```/);
+      const jsonStr = jsonMatch ? jsonMatch[1].trim() : content?.trim();
+      parsed = JSON.parse(jsonStr || "{}");
     } catch {
       console.error("Failed to parse AI response:", content);
       parsed = { items: [] };
