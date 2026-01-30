@@ -66,8 +66,8 @@ Return a JSON object with an "items" array. Each item should have:
         }],
         generationConfig: {
           responseMimeType: "application/json",
-          temperature: 0.1
-        }
+          temperature: 0.1,
+        },
       };
     } else {
       // For text content
@@ -80,13 +80,13 @@ Return a JSON object with an "items" array. Each item should have:
         }],
         generationConfig: {
           responseMimeType: "application/json",
-          temperature: 0.1
-        }
+          temperature: 0.1,
+        },
       };
     }
 
-    // Use gemini-1.5-flash for sales parsing (fast and cost-effective)
-    const model = "gemini-1.5-flash";
+    // Use gemini-2.0-flash for sales parsing (fast and cost-effective)
+    const model = "gemini-2.0-flash";
     
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`,

@@ -38,7 +38,8 @@ serve(async (req) => {
 
     // Hybrid model selection based on file type
     const isPDF = mimeType === "application/pdf";
-    const model = isPDF ? "gemini-1.5-pro" : "gemini-1.5-flash";
+    // Use model IDs that are currently available for generateContent.
+    const model = isPDF ? "gemini-2.0-pro" : "gemini-2.0-flash";
     
     console.log(`Processing ${fileName || "document"} with ${model} (mimeType: ${mimeType})`);
 
@@ -164,8 +165,8 @@ STATION INFERENCE RULES:
         }],
         generationConfig: {
           responseMimeType: "application/json",
-          temperature: 0.1
-        }
+          temperature: 0.1,
+        },
       };
     } else {
       // For text content (CSV/Excel extracted text)
@@ -178,8 +179,8 @@ STATION INFERENCE RULES:
         }],
         generationConfig: {
           responseMimeType: "application/json",
-          temperature: 0.1
-        }
+          temperature: 0.1,
+        },
       };
     }
 
