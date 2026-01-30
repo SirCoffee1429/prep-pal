@@ -38,7 +38,7 @@ serve(async (req) => {
 
     // Hybrid model selection based on file type
     const isPDF = mimeType === "application/pdf";
-    const model = isPDF ? "gemini-2.5-pro-preview-05-06" : "gemini-2.5-flash-preview-05-20";
+    const model = isPDF ? "gemini-1.5-pro" : "gemini-1.5-flash";
     
     console.log(`Processing ${fileName || "document"} with ${model} (mimeType: ${mimeType})`);
 
