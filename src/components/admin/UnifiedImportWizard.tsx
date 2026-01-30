@@ -36,6 +36,30 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
   const [items, setItems] = useState<ParsedItem[]>([]);
   const { toast } = useToast();
 
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  const isRateLimitError = (err: any) => {
+    const msg = `${err?.message || ""} ${err?.details || ""}`.toLowerCase();
+    return msg.includes("429") || msg.includes("rate limit") || msg.includes("resource exhausted");
+  };
+
+  // Avoid hammering the AI API during multi-sheet imports.
+  const invokeAnalyzeDocument = async (body: any) => {
+    const maxRetries = 3;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      const res = await supabase.functions.invoke("analyze-document", { body });
+      if (!res.error) return res;
+
+      if (isRateLimitError(res.error) && attempt < maxRetries) {
+        const backoffMs = Math.min(8000, 600 * Math.pow(2, attempt));
+        await sleep(backoffMs);
+        continue;
+      }
+
+      return res;
+    }
+  };
+
   const handleClose = () => {
     setStep("upload");
     setItems([]);
@@ -62,16 +86,26 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
           bytes.forEach((b) => (binary += String.fromCharCode(b)));
           const base64Content = btoa(binary);
 
-          const { data, error } = await supabase.functions.invoke("analyze-document", {
-            body: {
-              fileContent: base64Content,
-              fileName: file.name,
-              mimeType: "application/pdf",
-            },
+          const result = await invokeAnalyzeDocument({
+            fileContent: base64Content,
+            fileName: file.name,
+            mimeType: "application/pdf",
           });
+
+          const data = (result as any)?.data;
+          const error = (result as any)?.error;
 
           if (error) {
             console.error(`Error parsing PDF ${file.name}:`, error);
+            if (isRateLimitError(error)) {
+              toast({
+                title: "Rate limit exceeded",
+                description: "Waiting briefly and continuing…",
+                variant: "destructive",
+              });
+              // brief cooldown to reduce repeated 429s
+              await sleep(1500);
+            }
           } else {
             if (data?.data?.menu_items && Array.isArray(data.data.menu_items)) {
               const pdfItems: ParsedItem[] = data.data.menu_items.map((item: any, idx: number) => ({
@@ -100,6 +134,9 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
             }
           }
           processedCount++;
+
+          // Small delay between files to reduce bursting.
+          await sleep(250);
         } else if (file.name.endsWith(".xlsx") || file.name.endsWith(".xls")) {
           const arrayBuffer = await file.arrayBuffer();
           const workbook = XLSX.read(arrayBuffer);
@@ -110,16 +147,27 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
 
             if (!csv.trim()) continue;
 
-            const { data, error } = await supabase.functions.invoke("analyze-document", {
-              body: {
-                fileContent: csv,
-                fileName: `${file.name} [${sheetName}]`,
-                mimeType: "text/csv",
-              },
+            const result = await invokeAnalyzeDocument({
+              fileContent: csv,
+              fileName: `${file.name} [${sheetName}]`,
+              mimeType: "text/csv",
             });
+
+            const data = (result as any)?.data;
+            const error = (result as any)?.error;
 
             if (error) {
               console.error(`Error parsing ${file.name} - ${sheetName}:`, error);
+
+              // If we hit a rate limit mid-workbook, back off a bit before continuing.
+              if (isRateLimitError(error)) {
+                toast({
+                  title: "Rate limit exceeded",
+                  description: "Waiting briefly and continuing…",
+                  variant: "destructive",
+                });
+                await sleep(2000);
+              }
               continue;
             }
 
@@ -150,12 +198,20 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
             }
 
             processedCount++;
+
+            // Throttle between sheet calls to avoid API bursts.
+            await sleep(300);
           }
         } else {
           const textContent = await file.text();
-          const { data, error } = await supabase.functions.invoke("analyze-document", {
-            body: { fileContent: textContent, fileName: file.name, mimeType: "text/csv" },
+          const result = await invokeAnalyzeDocument({
+            fileContent: textContent,
+            fileName: file.name,
+            mimeType: "text/csv",
           });
+
+          const data = (result as any)?.data;
+          const error = (result as any)?.error;
 
           if (!error && data?.data?.menu_items) {
             const fileItems: ParsedItem[] = data.data.menu_items.map((item: any, idx: number) => ({
@@ -184,6 +240,8 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
           }
 
           processedCount++;
+
+          await sleep(250);
         }
       }
 
