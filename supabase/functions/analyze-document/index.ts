@@ -200,14 +200,111 @@ STATION INFERENCE RULES:
     if (!response.ok) {
       const errorText = await response.text();
       console.error("Gemini API error:", response.status, errorText);
-      
-      if (response.status === 429) {
-        return errorResponse("Rate limit exceeded. Please try again in a moment.", 429);
+
+      // Retry on rate limiting / transient errors with exponential backoff.
+      // This prevents bursts (multi-sheet imports) from hard-failing immediately.
+      if (response.status === 429 || response.status === 503) {
+        const maxRetries = 3;
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+          const backoffMs = Math.min(8000, 500 * Math.pow(2, attempt - 1));
+          const jitterMs = Math.floor(Math.random() * 250);
+          const waitMs = backoffMs + jitterMs;
+          console.warn(`Transient AI error ${response.status}. Retry ${attempt}/${maxRetries} in ${waitMs}ms`);
+          await new Promise((resolve) => setTimeout(resolve, waitMs));
+
+          const retryResponse = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`,
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify(requestBody),
+            }
+          );
+
+          if (retryResponse.ok) {
+            const aiResponse = await retryResponse.json();
+            // Check for API-specific errors in response body
+            if (aiResponse.error) {
+              console.error("Gemini API error in response:", aiResponse.error);
+              return errorResponse(`AI error: ${aiResponse.error.message || "Unknown error"}`, 500);
+            }
+
+            // Extract content from Gemini response format
+            const content = aiResponse.candidates?.[0]?.content?.parts?.[0]?.text;
+            if (!content) {
+              console.error("No content in Gemini response:", JSON.stringify(aiResponse));
+              throw new Error("AI did not return any content");
+            }
+
+            // Parse JSON from response
+            let parsedData;
+            try {
+              // Handle potential markdown code blocks
+              const jsonMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/);
+              const jsonStr = jsonMatch ? jsonMatch[1].trim() : content.trim();
+              parsedData = JSON.parse(jsonStr);
+            } catch (parseError) {
+              console.error("Failed to parse AI response:", content);
+              throw new Error("Failed to parse document data from AI response");
+            }
+
+            // Validate response structure
+            if (!parsedData.type || !parsedData.data) {
+              console.error("Invalid response structure:", parsedData);
+              throw new Error("Invalid response structure from AI");
+            }
+
+            // Enrich with station inference for menu_item and recipe types
+            if (parsedData.type === "menu_item" && parsedData.data.menu_items) {
+              parsedData.data.menu_items = parsedData.data.menu_items.map((item: any) => ({
+                ...item,
+                inferred_station: item.inferred_station || inferStation(item.name, item.category),
+              }));
+            }
+
+            if (parsedData.type === "recipe" && parsedData.data.recipes) {
+              parsedData.data.recipes = parsedData.data.recipes.map((recipe: any) => ({
+                ...recipe,
+                inferred_station: recipe.inferred_station || inferStation(
+                  recipe.name,
+                  undefined,
+                  recipe.ingredients?.map((i: any) => i.item)
+                ),
+              }));
+            }
+
+            console.log(`Successfully parsed as ${parsedData.type}: ${
+              parsedData.type === "menu_item" ? parsedData.data.menu_items?.length :
+              parsedData.type === "recipe" ? parsedData.data.recipes?.length :
+              parsedData.type === "par_sheet" ? parsedData.data.items?.length :
+              parsedData.type === "sales" ? parsedData.data.items?.length :
+              0
+            } items`);
+
+            return jsonResponse(parsedData);
+          }
+
+          const retryErrorText = await retryResponse.text();
+          console.error("Gemini API retry error:", retryResponse.status, retryErrorText);
+          if (retryResponse.status !== 429 && retryResponse.status !== 503) {
+            break;
+          }
+        }
+
+        return errorResponse(
+          response.status === 429
+            ? "Rate limit exceeded. Please try again in a moment."
+            : "AI service temporarily unavailable. Please try again.",
+          response.status
+        );
       }
+
       if (response.status === 400) {
         return errorResponse("Invalid request to AI service.", 400);
       }
-      
+
       return errorResponse("Failed to process with AI", 500);
     }
 
