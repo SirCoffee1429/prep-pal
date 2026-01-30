@@ -38,8 +38,10 @@ serve(async (req) => {
 
     // Hybrid model selection based on file type
     const isPDF = mimeType === "application/pdf";
-    // Use model IDs that are currently available for generateContent.
-    const model = isPDF ? "gemini-2.0-pro" : "gemini-2.0-flash";
+    // IMPORTANT:
+    // Some Gemini model IDs/aliases are not enabled for this API key/project and will 404.
+    // We use a single known-working generateContent model to avoid runtime failures.
+    const model = "gemini-2.0-flash";
     
     console.log(`Processing ${fileName || "document"} with ${model} (mimeType: ${mimeType})`);
 
