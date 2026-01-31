@@ -18,7 +18,7 @@ interface AnalyzeRequest {
   menuItems?: string[]; // For sales matching
 }
 
-serve(async (req) => {
+serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
@@ -42,11 +42,11 @@ serve(async (req) => {
     // Some Gemini model IDs/aliases are not enabled for this API key/project and will 404.
     // We use a single known-working generateContent model to avoid runtime failures.
     const model = "gemini-2.0-flash";
-    
+
     console.log(`Processing ${fileName || "document"} with ${model} (mimeType: ${mimeType})`);
 
     // Build menu items reference for sales matching
-    const menuItemsList = menuItems?.length 
+    const menuItemsList = menuItems?.length
       ? `\n\nKnown menu items in the system for matching: ${menuItems.join(", ")}`
       : "";
 
@@ -150,11 +150,30 @@ STATION INFERENCE RULES:
 - Salad/Caesar/Greens/Slaw → "salad"
 - Pasta/Risotto/Alfredo → "saute"
 - Steak/Burger/Grilled/Salmon → "grill"
-- Sauces/Sides/Other → "line"`;
+- Sauces/Sides/Other → "line"
+154: 
+155: EXTRACTION RULES FOR SALES REPORTS:
+156: 1. Extract the "Item" name and "Units Sold" value (this is quantity sold, NOT the dollar "Sales" column)
+157: 2. Convert decimal quantities to integers by rounding (4.0 -> 4, 2.5 -> 3)
+158: 3. Only include items where Units Sold > 0
+159: 
+160: ROWS TO SKIP (do NOT include these):
+161: - "Item Category Totals:" rows
+162: - "Totals:" (final summary row)
+163: - Modifiers/add-ons: "ADD SALMON", "ADD SHRIMP", "ADD STEAK", "GRILLED SALMON", "GRILLED SHRIMP"
+164: - Service instructions: "SALAD OUT FIRST", "SALAD WITH MEAL"
+165: - Generic items: "Open Food", "You Choose", "Birthday Dessert"
+166: - Size modifiers when they appear alone
+167: - Category headers without quantities
+168: 
+169: ITEM NAME MATCHING ADVICE:
+170: - PRESERVE "Half" and "Full" prefixes - these are DISTINCT menu items
+171: - "Half Caesar" != "Caesar"
+172: - Size prefixes like "7oz", "8oz" must be preserved`;
 
     // Build request body based on file type
     let requestBody: any;
-    
+
     if (isPDF) {
       // For PDFs, use vision with inline data
       requestBody = {
@@ -275,13 +294,12 @@ STATION INFERENCE RULES:
               }));
             }
 
-            console.log(`Successfully parsed as ${parsedData.type}: ${
-              parsedData.type === "menu_item" ? parsedData.data.menu_items?.length :
-              parsedData.type === "recipe" ? parsedData.data.recipes?.length :
-              parsedData.type === "par_sheet" ? parsedData.data.items?.length :
-              parsedData.type === "sales" ? parsedData.data.items?.length :
-              0
-            } items`);
+            console.log(`Successfully parsed as ${parsedData.type}: ${parsedData.type === "menu_item" ? parsedData.data.menu_items?.length :
+                parsedData.type === "recipe" ? parsedData.data.recipes?.length :
+                  parsedData.type === "par_sheet" ? parsedData.data.items?.length :
+                    parsedData.type === "sales" ? parsedData.data.items?.length :
+                      0
+              } items`);
 
             return jsonResponse(parsedData);
           }
@@ -309,7 +327,7 @@ STATION INFERENCE RULES:
     }
 
     const aiResponse = await response.json();
-    
+
     // Check for API-specific errors in response body
     if (aiResponse.error) {
       console.error("Gemini API error in response:", aiResponse.error);
@@ -360,13 +378,12 @@ STATION INFERENCE RULES:
       }));
     }
 
-    console.log(`Successfully parsed as ${parsedData.type}: ${
-      parsedData.type === "menu_item" ? parsedData.data.menu_items?.length :
-      parsedData.type === "recipe" ? parsedData.data.recipes?.length :
-      parsedData.type === "par_sheet" ? parsedData.data.items?.length :
-      parsedData.type === "sales" ? parsedData.data.items?.length :
-      0
-    } items`);
+    console.log(`Successfully parsed as ${parsedData.type}: ${parsedData.type === "menu_item" ? parsedData.data.menu_items?.length :
+        parsedData.type === "recipe" ? parsedData.data.recipes?.length :
+          parsedData.type === "par_sheet" ? parsedData.data.items?.length :
+            parsedData.type === "sales" ? parsedData.data.items?.length :
+              0
+      } items`);
 
     return jsonResponse(parsedData);
   } catch (error) {

@@ -213,6 +213,19 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
           const data = (result as any)?.data;
           const error = (result as any)?.error;
 
+          if (!error && (data?.type === "sales" || data?.data?.items)) {
+            const salesItems: ParsedItem[] = (data.data.items || []).map((item: any, idx: number) => ({
+              id: `${file.name}-sales-${idx}`,
+              name: item.name || "Unknown Item",
+              type: "sales_data" as const,
+              station: "line" as KitchenStation, // Default for sales (irrelevant)
+              status: "new" as const,
+              original_data: item,
+              source_file: file.name,
+            }));
+            allParsedItems.push(...salesItems);
+          }
+
           if (!error && data?.data?.menu_items) {
             const fileItems: ParsedItem[] = data.data.menu_items.map((item: any, idx: number) => ({
               id: `${file.name}-${idx}`,
@@ -291,6 +304,23 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
             portion_cost: item.original_data.portion_cost ? Number(item.original_data.portion_cost) : null,
           });
           if (!error) successCount++;
+        } else if (item.type === "sales_data") {
+          // Best-effort match by name. 
+          // Note: SalesUpload.tsx is preferred for sales as it supports manual matching and date selection.
+          const { data: match } = await supabase
+            .from("menu_items")
+            .select("id")
+            .ilike("name", item.name) // Use case-insensitive match
+            .maybeSingle();
+
+          if (match) {
+            const { error } = await supabase.from("sales_data").insert({
+              menu_item_id: match.id,
+              quantity_sold: Number(item.original_data.quantity),
+              sales_date: new Date(Date.now() - 86400000).toISOString().split('T')[0], // Default to Yesterday
+            });
+            if (!error) successCount++;
+          }
         }
       }
 

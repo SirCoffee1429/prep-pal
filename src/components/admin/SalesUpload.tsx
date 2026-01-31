@@ -110,13 +110,20 @@ const SalesUpload = () => {
         fileContent = await file.text();
       }
 
-      // Send to AI for parsing
-      const response = await supabase.functions.invoke("parse-sales", {
+      // Determine mime type
+      const mimeType = file.name.toLowerCase().endsWith('.pdf')
+        ? "application/pdf"
+        : file.name.toLowerCase().endsWith('.csv')
+          ? "text/csv"
+          : "text/plain";
+
+      // Send to AI for parsing via Unified Endpoint
+      const response = await supabase.functions.invoke("analyze-document", {
         body: {
           fileContent,
+          mimeType,
           fileName: file.name,
           menuItems: menuItems.map((m) => m.name),
-          isBase64,
         },
       });
 
@@ -142,7 +149,18 @@ const SalesUpload = () => {
         throw response.error;
       }
 
-      const parsed: ParsedItem[] = response.data.items || [];
+      const responseData = response.data;
+
+      if (responseData.type !== "sales") {
+        toast({
+          title: "Unexpected File Type",
+          description: `AI identified this as ${responseData.type}, but expected sales data.`,
+          variant: "destructive",
+        });
+        return;
+      }
+
+      const parsed: ParsedItem[] = responseData.data.items || [];
 
       // Match parsed items to menu items using fuzzy matching
       const matchedItems = parsed.map((item) => {
@@ -156,7 +174,7 @@ const SalesUpload = () => {
       });
 
       setParsedItems(matchedItems);
-      
+
       const matchedCount = matchedItems.filter(i => i.matched_item_id).length;
       toast({
         title: "Parsing complete",
@@ -178,7 +196,7 @@ const SalesUpload = () => {
     setParsedItems((prev) =>
       prev.map((item, i) => {
         if (i !== index) return item;
-        
+
         if (menuItemId === "none") {
           return {
             ...item,
@@ -187,7 +205,7 @@ const SalesUpload = () => {
             match_confidence: 'none' as const,
           };
         }
-        
+
         const menuItem = menuItems.find((m) => m.id === menuItemId);
         return {
           ...item,
