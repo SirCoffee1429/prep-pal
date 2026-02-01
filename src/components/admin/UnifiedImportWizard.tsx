@@ -73,6 +73,24 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
     setIsProcessing(true);
     const allParsedItems: ParsedItem[] = [];
     let processedCount = 0;
+    let skippedDuplicates = 0;
+
+    // Track seen item names to deduplicate across workbooks
+    // (e.g., Mac and Cheese appears in Brisket, Combo Platter, Pulled Pork kits)
+    const seenNames = new Set<string>();
+    const normalizeName = (name: string) => name.toLowerCase().trim();
+
+    // Helper to add item only if not a duplicate
+    const addItemIfUnique = (item: ParsedItem) => {
+      const normalizedName = normalizeName(item.name);
+      if (seenNames.has(normalizedName)) {
+        console.log(`Skipping duplicate: "${item.name}" (already seen)`);
+        skippedDuplicates++;
+        return;
+      }
+      seenNames.add(normalizedName);
+      allParsedItems.push(item);
+    };
 
     try {
       for (let i = 0; i < files.length; i++) {
@@ -117,7 +135,7 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
                 original_data: item,
                 source_file: file.name,
               }));
-              allParsedItems.push(...pdfItems);
+              pdfItems.forEach(addItemIfUnique);
             }
 
             if (data?.data?.recipes && Array.isArray(data.data.recipes)) {
@@ -130,7 +148,7 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
                 original_data: item,
                 source_file: file.name,
               }));
-              allParsedItems.push(...recipeItems);
+              recipeItems.forEach(addItemIfUnique);
             }
           }
           processedCount++;
@@ -202,7 +220,7 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
                 original_data: item,
                 source_file: `${file.name} • ${sheetName}`,
               }));
-              allParsedItems.push(...forcedItems);
+              forcedItems.forEach(addItemIfUnique);
             } else {
               // No A1 indicator — fall back to AI's classification
               if (data?.data?.menu_items && Array.isArray(data.data.menu_items)) {
@@ -215,7 +233,7 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
                   original_data: item,
                   source_file: `${file.name} • ${sheetName}`,
                 }));
-                allParsedItems.push(...sheetItems);
+                sheetItems.forEach(addItemIfUnique);
               }
 
               if (data?.data?.recipes && Array.isArray(data.data.recipes)) {
@@ -228,7 +246,7 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
                   original_data: item,
                   source_file: `${file.name} • ${sheetName}`,
                 }));
-                allParsedItems.push(...recipeItems);
+                recipeItems.forEach(addItemIfUnique);
               }
             }
 
@@ -258,7 +276,7 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
               original_data: item,
               source_file: file.name,
             }));
-            allParsedItems.push(...salesItems);
+            salesItems.forEach(addItemIfUnique);
           }
 
           if (!error && data?.data?.menu_items) {
@@ -271,7 +289,7 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
               original_data: item,
               source_file: file.name,
             }));
-            allParsedItems.push(...fileItems);
+            fileItems.forEach(addItemIfUnique);
           }
 
           if (!error && data?.data?.recipes) {
@@ -284,7 +302,7 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
               original_data: item,
               source_file: file.name,
             }));
-            allParsedItems.push(...recipeItems);
+            recipeItems.forEach(addItemIfUnique);
           }
 
           processedCount++;
@@ -299,7 +317,7 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
       }
       toast({
         title: "Processing Complete",
-        description: `Scanned ${processedCount} sheets. Found ${allParsedItems.length} items.`,
+        description: `Scanned ${processedCount} sheets. Found ${allParsedItems.length} unique items${skippedDuplicates > 0 ? ` (${skippedDuplicates} duplicates skipped)` : ''}.`,
       });
     } catch (error) {
       console.error(error);
