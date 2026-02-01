@@ -12,10 +12,21 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { Combobox } from "@/components/ui/combobox";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { Upload, Loader2, FileText, Sparkles, Calendar, Check, X } from "lucide-react";
+import { Upload, Loader2, FileText, Sparkles, Calendar, Check, X, Trash2 } from "lucide-react";
 import { findBestMatch, getConfidenceColor, getConfidenceLabel, type MatchResult } from "@/lib/itemMatching";
 
 interface ParsedItem {
@@ -37,6 +48,7 @@ const SalesUpload = () => {
   const [isUploading, setIsUploading] = useState(false);
   const [isParsing, setIsParsing] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [parsedItems, setParsedItems] = useState<ParsedItem[]>([]);
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
@@ -295,6 +307,27 @@ const SalesUpload = () => {
     }
   };
 
+  const handleDeleteAllPrepLists = async () => {
+    setIsDeleting(true);
+    try {
+      // Delete prep_list_items first (foreign key), then prep_lists
+      await supabase.from("prep_list_items").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+      const { error } = await supabase.from("prep_lists").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+      if (error) throw error;
+
+      toast({ title: "Success", description: "All prep lists deleted" });
+    } catch (error) {
+      console.error("Error deleting:", error);
+      toast({
+        title: "Error",
+        description: "Failed to delete prep lists",
+        variant: "destructive",
+      });
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   const matchedCount = parsedItems.filter((i) => i.matched_item_id).length;
   const unmatchedCount = parsedItems.length - matchedCount;
 
@@ -463,7 +496,7 @@ const SalesUpload = () => {
             Generate today's prep list based on existing sales data and par levels
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="flex gap-2">
           <Button
             onClick={handleGeneratePrepList}
             disabled={isGenerating}
@@ -481,6 +514,33 @@ const SalesUpload = () => {
               </>
             )}
           </Button>
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button variant="destructive" disabled={isDeleting}>
+                {isDeleting ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Trash2 className="mr-2 h-4 w-4" />
+                )}
+                Delete All Prep Lists
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Delete All Prep Lists?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This will permanently delete all prep lists and their items.
+                  This action cannot be undone.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction onClick={handleDeleteAllPrepLists}>
+                  Delete All
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </CardContent>
       </Card>
     </div>

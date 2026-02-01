@@ -19,6 +19,17 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { Plus, Pencil, Trash2, Loader2, Upload, Eye, FileSpreadsheet, FolderUp } from "lucide-react";
@@ -59,6 +70,7 @@ const RecipeManagement = () => {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingRecipe, setEditingRecipe] = useState<Recipe | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
 
   // Import state
@@ -105,13 +117,13 @@ const RecipeManagement = () => {
         food_cost_percent: r.food_cost_percent,
         ingredients: r.ingredients
           ? (typeof r.ingredients === "string"
-              ? JSON.parse(r.ingredients)
-              : (r.ingredients as unknown as Ingredient[]))
+            ? JSON.parse(r.ingredients)
+            : (r.ingredients as unknown as Ingredient[]))
           : null,
         tools: r.tools
           ? (Array.isArray(r.tools)
-              ? r.tools as string[]
-              : typeof r.tools === "string"
+            ? r.tools as string[]
+            : typeof r.tools === "string"
               ? JSON.parse(r.tools)
               : null)
           : null,
@@ -177,14 +189,14 @@ const RecipeManagement = () => {
         try {
           const data = new Uint8Array(e.target?.result as ArrayBuffer);
           const workbook = XLSX.read(data, { type: "array" });
-          
+
           let allText = "";
           workbook.SheetNames.forEach((sheetName) => {
             const worksheet = workbook.Sheets[sheetName];
             const sheetText = XLSX.utils.sheet_to_csv(worksheet);
             allText += `\n=== Sheet: ${sheetName} ===\n${sheetText}\n`;
           });
-          
+
           resolve(allText);
         } catch (error) {
           reject(error);
@@ -202,7 +214,7 @@ const RecipeManagement = () => {
   const handleImportFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    
+
     // Reset input so same file can be selected again
     e.target.value = "";
 
@@ -218,13 +230,13 @@ const RecipeManagement = () => {
     setIsParsing(true);
     try {
       const fileContent = await parseExcelToText(file);
-      
+
       const { data, error } = await supabase.functions.invoke("analyze-document", {
         body: { fileContent, fileName: file.name, mimeType: "text/csv" },
       });
 
       if (error) throw error;
-      
+
       if (data?.type !== "recipe" || !data?.data?.recipes || data.data.recipes.length === 0) {
         toast({
           title: "No Recipes Found",
@@ -268,7 +280,7 @@ const RecipeManagement = () => {
         title: "Import Complete",
         description: `${recipesToImport.length} recipe${recipesToImport.length !== 1 ? "s" : ""} imported`,
       });
-      
+
       setShowImportPreview(false);
       setParsedRecipes([]);
       fetchRecipes();
@@ -386,6 +398,26 @@ const RecipeManagement = () => {
     }
   };
 
+  const handleDeleteAll = async () => {
+    setIsDeleting(true);
+    try {
+      const { error } = await supabase.from("recipes").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+      if (error) throw error;
+
+      toast({ title: "Success", description: "All recipes deleted" });
+      fetchRecipes();
+    } catch (error) {
+      console.error("Error deleting:", error);
+      toast({
+        title: "Error",
+        description: "Failed to delete recipes",
+        variant: "destructive",
+      });
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -396,239 +428,266 @@ const RecipeManagement = () => {
 
   return (
     <>
-    <Card>
-      <CardHeader className="flex flex-row items-center justify-between">
-        <div>
-          <CardTitle>Recipes</CardTitle>
-          <CardDescription>
-            Manage recipe cards for your menu items
-          </CardDescription>
-        </div>
-        <div className="flex gap-2">
-          {/* Hidden import input */}
-          <input
-            ref={importInputRef}
-            type="file"
-            accept=".xlsx,.xls"
-            onChange={handleImportFileSelect}
-            className="hidden"
-          />
-          <Button variant="outline" onClick={handleImportClick} disabled={isParsing}>
-            {isParsing ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : (
-              <FileSpreadsheet className="mr-2 h-4 w-4" />
-            )}
-            {isParsing ? "Parsing..." : "Import Recipe"}
-          </Button>
-          <Button variant="outline" onClick={() => setShowBatchImport(true)}>
-            <FolderUp className="mr-2 h-4 w-4" />
-            Batch Import
-          </Button>
-          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-            <DialogTrigger asChild>
-              <Button onClick={() => openDialog()}>
-                <Plus className="mr-2 h-4 w-4" />
-                Add Recipe
-              </Button>
-            </DialogTrigger>
-          <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
-            <DialogHeader>
-              <DialogTitle>
-                {editingRecipe ? "Edit Recipe" : "Add Recipe"}
-              </DialogTitle>
-            </DialogHeader>
-            <div className="space-y-6">
-              {/* Name */}
-              <div className="space-y-2">
-                <Label htmlFor="recipeName">Recipe Name</Label>
-                <Input
-                  id="recipeName"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="e.g., Béarnaise Sauce"
-                />
-              </div>
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <div>
+            <CardTitle>Recipes</CardTitle>
+            <CardDescription>
+              Manage recipe cards for your menu items
+            </CardDescription>
+          </div>
+          <div className="flex gap-2">
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button variant="destructive" disabled={isDeleting}>
+                  {isDeleting ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="mr-2 h-4 w-4" />
+                  )}
+                  Delete All
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Delete All Recipes?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This will permanently delete all recipes.
+                    This action cannot be undone.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction onClick={handleDeleteAll}>
+                    Delete All
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+            {/* Hidden import input */}
+            <input
+              ref={importInputRef}
+              type="file"
+              accept=".xlsx,.xls"
+              onChange={handleImportFileSelect}
+              className="hidden"
+            />
+            <Button variant="outline" onClick={handleImportClick} disabled={isParsing}>
+              {isParsing ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <FileSpreadsheet className="mr-2 h-4 w-4" />
+              )}
+              {isParsing ? "Parsing..." : "Import Recipe"}
+            </Button>
+            <Button variant="outline" onClick={() => setShowBatchImport(true)}>
+              <FolderUp className="mr-2 h-4 w-4" />
+              Batch Import
+            </Button>
+            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+              <DialogTrigger asChild>
+                <Button onClick={() => openDialog()}>
+                  <Plus className="mr-2 h-4 w-4" />
+                  Add Recipe
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+                <DialogHeader>
+                  <DialogTitle>
+                    {editingRecipe ? "Edit Recipe" : "Add Recipe"}
+                  </DialogTitle>
+                </DialogHeader>
+                <div className="space-y-6">
+                  {/* Name */}
+                  <div className="space-y-2">
+                    <Label htmlFor="recipeName">Recipe Name</Label>
+                    <Input
+                      id="recipeName"
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      placeholder="e.g., Béarnaise Sauce"
+                    />
+                  </div>
 
-              {/* Ingredients */}
-              <div className="space-y-2">
-                <Label>Ingredients</Label>
-                {ingredients.map((ing, idx) => (
-                  <div key={idx} className="flex gap-2">
-                    <Input
-                      placeholder="Ingredient"
-                      value={ing.item}
-                      onChange={(e) => updateIngredient(idx, "item", e.target.value)}
-                      className="flex-1"
-                    />
-                    <Input
-                      placeholder="Quantity"
-                      value={ing.quantity}
-                      onChange={(e) => updateIngredient(idx, "quantity", e.target.value)}
-                      className="w-32"
-                    />
+                  {/* Ingredients */}
+                  <div className="space-y-2">
+                    <Label>Ingredients</Label>
+                    {ingredients.map((ing, idx) => (
+                      <div key={idx} className="flex gap-2">
+                        <Input
+                          placeholder="Ingredient"
+                          value={ing.item}
+                          onChange={(e) => updateIngredient(idx, "item", e.target.value)}
+                          className="flex-1"
+                        />
+                        <Input
+                          placeholder="Quantity"
+                          value={ing.quantity}
+                          onChange={(e) => updateIngredient(idx, "quantity", e.target.value)}
+                          className="w-32"
+                        />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => removeIngredient(idx)}
+                          disabled={ingredients.length === 1}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    ))}
                     <Button
                       type="button"
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => removeIngredient(idx)}
-                      disabled={ingredients.length === 1}
+                      variant="outline"
+                      size="sm"
+                      onClick={addIngredient}
                     >
-                      <Trash2 className="h-4 w-4" />
+                      <Plus className="mr-2 h-4 w-4" />
+                      Add Ingredient
                     </Button>
                   </div>
-                ))}
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={addIngredient}
-                >
-                  <Plus className="mr-2 h-4 w-4" />
-                  Add Ingredient
-                </Button>
-              </div>
 
-              {/* Method */}
-              <div className="space-y-2">
-                <Label htmlFor="method">Method</Label>
-                <Textarea
-                  id="method"
-                  value={method}
-                  onChange={(e) => setMethod(e.target.value)}
-                  placeholder="Step-by-step instructions..."
-                  rows={5}
-                />
-              </div>
+                  {/* Method */}
+                  <div className="space-y-2">
+                    <Label htmlFor="method">Method</Label>
+                    <Textarea
+                      id="method"
+                      value={method}
+                      onChange={(e) => setMethod(e.target.value)}
+                      placeholder="Step-by-step instructions..."
+                      rows={5}
+                    />
+                  </div>
 
-              {/* Plating Notes */}
-              <div className="space-y-2">
-                <Label htmlFor="plating">Plating Notes</Label>
-                <Textarea
-                  id="plating"
-                  value={platingNotes}
-                  onChange={(e) => setPlatingNotes(e.target.value)}
-                  placeholder="Presentation guidelines..."
-                  rows={3}
-                />
-              </div>
+                  {/* Plating Notes */}
+                  <div className="space-y-2">
+                    <Label htmlFor="plating">Plating Notes</Label>
+                    <Textarea
+                      id="plating"
+                      value={platingNotes}
+                      onChange={(e) => setPlatingNotes(e.target.value)}
+                      placeholder="Presentation guidelines..."
+                      rows={3}
+                    />
+                  </div>
 
-              {/* File Upload */}
-              <div className="space-y-2">
-                <Label>Recipe File (Optional)</Label>
-                <div className="flex gap-2">
-                  <Input
-                    type="file"
-                    accept=".pdf,.xlsx,.xls,.doc,.docx,image/*"
-                    onChange={handleFileUpload}
-                    disabled={isUploading}
-                  />
-                  {isUploading && <Loader2 className="h-5 w-5 animate-spin" />}
-                </div>
-                {fileUrl && (
-                  <a
-                    href={fileUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-sm text-primary underline"
-                  >
-                    View uploaded file
-                  </a>
-                )}
-              </div>
-
-              {/* Save Button */}
-              <Button
-                onClick={handleSave}
-                className="w-full"
-                disabled={isSaving}
-              >
-                {isSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                {editingRecipe ? "Update Recipe" : "Create Recipe"}
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
-        </div>
-      </CardHeader>
-      <CardContent>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Name</TableHead>
-              <TableHead>Ingredients</TableHead>
-              <TableHead>Has File</TableHead>
-              <TableHead className="w-32">Actions</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {recipes.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={4} className="text-center text-muted-foreground">
-                  No recipes yet. Add your first recipe above.
-                </TableCell>
-              </TableRow>
-            ) : (
-              recipes.map((recipe) => (
-                <TableRow key={recipe.id}>
-                  <TableCell className="font-medium">{recipe.name}</TableCell>
-                  <TableCell>
-                    {recipe.ingredients?.length || 0} items
-                  </TableCell>
-                  <TableCell>
-                    {recipe.file_url ? (
+                  {/* File Upload */}
+                  <div className="space-y-2">
+                    <Label>Recipe File (Optional)</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        type="file"
+                        accept=".pdf,.xlsx,.xls,.doc,.docx,image/*"
+                        onChange={handleFileUpload}
+                        disabled={isUploading}
+                      />
+                      {isUploading && <Loader2 className="h-5 w-5 animate-spin" />}
+                    </div>
+                    {fileUrl && (
                       <a
-                        href={recipe.file_url}
+                        href={fileUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex items-center text-primary hover:underline"
+                        className="text-sm text-primary underline"
                       >
-                        <Eye className="mr-1 h-4 w-4" />
-                        View
+                        View uploaded file
                       </a>
-                    ) : (
-                      "-"
                     )}
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex gap-2">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => openDialog(recipe)}
-                      >
-                        <Pencil className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => handleDelete(recipe.id)}
-                      >
-                        <Trash2 className="h-4 w-4 text-destructive" />
-                      </Button>
-                    </div>
+                  </div>
+
+                  {/* Save Button */}
+                  <Button
+                    onClick={handleSave}
+                    className="w-full"
+                    disabled={isSaving}
+                  >
+                    {isSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                    {editingRecipe ? "Update Recipe" : "Create Recipe"}
+                  </Button>
+                </div>
+              </DialogContent>
+            </Dialog>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Name</TableHead>
+                <TableHead>Ingredients</TableHead>
+                <TableHead>Has File</TableHead>
+                <TableHead className="w-32">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {recipes.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={4} className="text-center text-muted-foreground">
+                    No recipes yet. Add your first recipe above.
                   </TableCell>
                 </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
-      </CardContent>
-    </Card>
-    
-    <RecipeImportPreview
-      open={showImportPreview}
-      onOpenChange={setShowImportPreview}
-      recipes={parsedRecipes}
-      onImport={handleImportRecipes}
-      isImporting={isImporting}
-    />
-    
-    <UnifiedImportWizard
-      open={showBatchImport}
-      onOpenChange={setShowBatchImport}
-      onComplete={fetchRecipes}
-    />
+              ) : (
+                recipes.map((recipe) => (
+                  <TableRow key={recipe.id}>
+                    <TableCell className="font-medium">{recipe.name}</TableCell>
+                    <TableCell>
+                      {recipe.ingredients?.length || 0} items
+                    </TableCell>
+                    <TableCell>
+                      {recipe.file_url ? (
+                        <a
+                          href={recipe.file_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center text-primary hover:underline"
+                        >
+                          <Eye className="mr-1 h-4 w-4" />
+                          View
+                        </a>
+                      ) : (
+                        "-"
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex gap-2">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => openDialog(recipe)}
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => handleDelete(recipe.id)}
+                        >
+                          <Trash2 className="h-4 w-4 text-destructive" />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      <RecipeImportPreview
+        open={showImportPreview}
+        onOpenChange={setShowImportPreview}
+        recipes={parsedRecipes}
+        onImport={handleImportRecipes}
+        isImporting={isImporting}
+      />
+
+      <UnifiedImportWizard
+        open={showBatchImport}
+        onOpenChange={setShowBatchImport}
+        onComplete={fetchRecipes}
+      />
     </>
   );
 };

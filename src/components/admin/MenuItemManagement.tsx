@@ -25,6 +25,17 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { Plus, Pencil, Trash2, Loader2, Upload, FileStack } from "lucide-react";
@@ -65,6 +76,7 @@ const MenuItemManagement = () => {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<MenuItem | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Import state
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -192,6 +204,30 @@ const MenuItemManagement = () => {
         description: "Failed to delete menu item",
         variant: "destructive",
       });
+    }
+  };
+
+  const handleDeleteAll = async () => {
+    setIsDeleting(true);
+    try {
+      // Delete related par_levels and prep_list_items first (foreign key constraints)
+      await supabase.from("par_levels").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+      await supabase.from("prep_list_items").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+
+      const { error } = await supabase.from("menu_items").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+      if (error) throw error;
+
+      toast({ title: "Success", description: "All menu items deleted" });
+      fetchData();
+    } catch (error) {
+      console.error("Error deleting:", error);
+      toast({
+        title: "Error",
+        description: "Failed to delete menu items",
+        variant: "destructive",
+      });
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -354,9 +390,8 @@ const MenuItemManagement = () => {
 
       toast({
         title: "Import Complete",
-        description: `Imported ${successCount} item${successCount !== 1 ? "s" : ""}${
-          skippedCount > 0 ? `, skipped ${skippedCount} existing` : ""
-        }`,
+        description: `Imported ${successCount} item${successCount !== 1 ? "s" : ""}${skippedCount > 0 ? `, skipped ${skippedCount} existing` : ""
+          }`,
       });
 
       setIsImportPreviewOpen(false);
@@ -388,6 +423,33 @@ const MenuItemManagement = () => {
         <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle>Menu Items</CardTitle>
           <div className="flex gap-2">
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button variant="destructive" disabled={isDeleting}>
+                  {isDeleting ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="mr-2 h-4 w-4" />
+                  )}
+                  Delete All
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Delete All Menu Items?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This will permanently delete all menu items, their par levels, and related prep list items.
+                    This action cannot be undone.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction onClick={handleDeleteAll}>
+                    Delete All
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
             <input
               ref={fileInputRef}
               type="file"
@@ -464,8 +526,8 @@ const MenuItemManagement = () => {
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="recipe">Recipe (Optional)</Label>
-                    <Select 
-                      value={recipeId || "none"} 
+                    <Select
+                      value={recipeId || "none"}
                       onValueChange={(v) => setRecipeId(v === "none" ? null : v)}
                     >
                       <SelectTrigger>

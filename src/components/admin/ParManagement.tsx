@@ -17,9 +17,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, Save, Upload } from "lucide-react";
+import { Loader2, Save, Upload, Trash2 } from "lucide-react";
 import type { Database } from "@/integrations/supabase/types";
 import ParSheetImportDialog from "./ParSheetImportDialog";
 
@@ -64,6 +75,7 @@ const ParManagement = () => {
   const [selectedStation, setSelectedStation] = useState<KitchenStation | "all">("all");
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [changes, setChanges] = useState<Map<string, number>>(new Map());
   const [importDialogOpen, setImportDialogOpen] = useState(false);
 
@@ -156,6 +168,26 @@ const ParManagement = () => {
     }
   };
 
+  const handleDeleteAll = async () => {
+    setIsDeleting(true);
+    try {
+      const { error } = await supabase.from("par_levels").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+      if (error) throw error;
+
+      toast({ title: "Success", description: "All par levels deleted" });
+      fetchData();
+    } catch (error) {
+      console.error("Error deleting:", error);
+      toast({
+        title: "Error",
+        description: "Failed to delete par levels",
+        variant: "destructive",
+      });
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   const filteredItems =
     selectedStation === "all"
       ? menuItems
@@ -216,6 +248,33 @@ const ParManagement = () => {
             </Select>
           </div>
           <div className="flex gap-2 ml-auto">
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button variant="destructive" disabled={isDeleting}>
+                  {isDeleting ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="mr-2 h-4 w-4" />
+                  )}
+                  Delete All
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Delete All Par Levels?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This will permanently delete all par levels for all days and all items.
+                    This action cannot be undone.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction onClick={handleDeleteAll}>
+                    Delete All
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
             <Button
               variant="outline"
               onClick={() => setImportDialogOpen(true)}
