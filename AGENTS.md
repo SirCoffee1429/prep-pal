@@ -15,6 +15,7 @@ Your data ingestion strategy must handle three specific file types. You must res
   - A1 == "MENU ITEM:": This is a Sellable Item (e.g., "Asian Salad"). It maps directly to the "Item" column in Sales Reports.
   - A1 == "RECIPE:": This is a Sub-Component (e.g., "Peanut Dressing"). It is referenced by Menu Items.
   - Linkage: If a Menu Item ingredient listing says (See Recipe), you must programmatically link it to the corresponding "RECIPE" sheet.
+  - Additional Info: MENU ITEM:(menu_item) sheet tab is green and RECIPE:(recipe) sheet tab is blue. 
 
 3. Sales Reports (.pdf):
     - Structure: Tables with headers "Item", "Units Sold".

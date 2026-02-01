@@ -147,6 +147,19 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
 
             if (!csv.trim()) continue;
 
+            // === A1 CELL PRE-CHECK (per AGENTS.md rules) ===
+            // Check cell A1 to determine type before AI processing:
+            // - "MENU ITEM:" prefix → menu_item (sellable dish)
+            // - "RECIPE:" prefix → prep_recipe (sub-component)
+            const a1Value = (worksheet['A1']?.v || worksheet['A1']?.w || '').toString().trim().toUpperCase();
+            const forcedType: "menu_item" | "prep_recipe" | null =
+              a1Value.startsWith('MENU ITEM') ? 'menu_item' :
+                a1Value.startsWith('RECIPE') ? 'prep_recipe' : null;
+
+            if (forcedType) {
+              console.log(`Sheet "${sheetName}" detected as ${forcedType} from A1: "${a1Value}"`);
+            }
+
             const result = await invokeAnalyzeDocument({
               fileContent: csv,
               fileName: `${file.name} [${sheetName}]`,
@@ -171,30 +184,52 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
               continue;
             }
 
-            if (data?.data?.menu_items && Array.isArray(data.data.menu_items)) {
-              const sheetItems: ParsedItem[] = data.data.menu_items.map((item: any, idx: number) => ({
+            // If A1 tells us the type, use that and pull items from whichever array the AI returned
+            if (forcedType) {
+              // Collect all items from both arrays (AI might have put them in either)
+              const allItems = [
+                ...(data?.data?.menu_items || []),
+                ...(data?.data?.recipes || []),
+              ];
+
+              const forcedItems: ParsedItem[] = allItems.map((item: any, idx: number) => ({
                 id: `${file.name}-${sheetName}-${idx}`,
                 name: item.name || "Unknown",
-                type: "menu_item" as const,
-                station: (item.station?.toLowerCase() as KitchenStation) || "grill",
+                type: forcedType,
+                station: (item.station?.toLowerCase() as KitchenStation) ||
+                  (item.inferred_station?.toLowerCase() as KitchenStation) || "grill",
                 status: "new" as const,
                 original_data: item,
                 source_file: `${file.name} • ${sheetName}`,
               }));
-              allParsedItems.push(...sheetItems);
-            }
+              allParsedItems.push(...forcedItems);
+            } else {
+              // No A1 indicator — fall back to AI's classification
+              if (data?.data?.menu_items && Array.isArray(data.data.menu_items)) {
+                const sheetItems: ParsedItem[] = data.data.menu_items.map((item: any, idx: number) => ({
+                  id: `${file.name}-${sheetName}-${idx}`,
+                  name: item.name || "Unknown",
+                  type: "menu_item" as const,
+                  station: (item.station?.toLowerCase() as KitchenStation) || "grill",
+                  status: "new" as const,
+                  original_data: item,
+                  source_file: `${file.name} • ${sheetName}`,
+                }));
+                allParsedItems.push(...sheetItems);
+              }
 
-            if (data?.data?.recipes && Array.isArray(data.data.recipes)) {
-              const recipeItems: ParsedItem[] = data.data.recipes.map((item: any, idx: number) => ({
-                id: `${file.name}-${sheetName}-recipe-${idx}`,
-                name: item.name || "Unknown Recipe",
-                type: "prep_recipe" as const,
-                station: "grill" as KitchenStation,
-                status: "new" as const,
-                original_data: item,
-                source_file: `${file.name} • ${sheetName}`,
-              }));
-              allParsedItems.push(...recipeItems);
+              if (data?.data?.recipes && Array.isArray(data.data.recipes)) {
+                const recipeItems: ParsedItem[] = data.data.recipes.map((item: any, idx: number) => ({
+                  id: `${file.name}-${sheetName}-recipe-${idx}`,
+                  name: item.name || "Unknown Recipe",
+                  type: "prep_recipe" as const,
+                  station: "grill" as KitchenStation,
+                  status: "new" as const,
+                  original_data: item,
+                  source_file: `${file.name} • ${sheetName}`,
+                }));
+                allParsedItems.push(...recipeItems);
+              }
             }
 
             processedCount++;
