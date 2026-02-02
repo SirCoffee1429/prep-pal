@@ -18,7 +18,7 @@ interface ParsedItem {
   name: string;
   type: "menu_item" | "prep_recipe" | "sales_data";
   station: KitchenStation;
-  status: "new" | "duplicate_menu" | "duplicate_recipe";
+  status: "new" | "duplicate_menu" | "duplicate_recipe" | "duplicate_db";
   existing_id?: string;
   original_data: any;
   source_file: string;
@@ -37,6 +37,22 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
   const { toast } = useToast();
 
   const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  // Normalize names for comparison
+  const normalizeName = (name: string) => name.toLowerCase().trim();
+
+  // Preflight: fetch existing names from DB to detect duplicates
+  const fetchExistingNames = async () => {
+    const [menuRes, recipeRes] = await Promise.all([
+      supabase.from("menu_items").select("name"),
+      supabase.from("recipes").select("name"),
+    ]);
+
+    const menuNames = new Set((menuRes.data || []).map((r) => normalizeName(r.name)));
+    const recipeNames = new Set((recipeRes.data || []).map((r) => normalizeName(r.name)));
+
+    return { menuNames, recipeNames };
+  };
 
   const isRateLimitError = (err: any) => {
     const msg = `${err?.message || ""} ${err?.details || ""}`.toLowerCase();
@@ -75,21 +91,34 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
     let processedCount = 0;
     let skippedDuplicates = 0;
 
+    // Preflight: fetch existing DB names before processing
+    const { menuNames, recipeNames } = await fetchExistingNames();
+
     // Track seen item names to deduplicate across workbooks
     // (e.g., Mac and Cheese appears in Brisket, Combo Platter, Pulled Pork kits)
     const seenNames = new Set<string>();
-    const normalizeName = (name: string) => name.toLowerCase().trim();
 
-    // Helper to add item only if not a duplicate
+    // Helper to add item only if not a duplicate within batch
+    // Also marks items that exist in DB with duplicate_db status
     const addItemIfUnique = (item: ParsedItem) => {
       const normalizedName = normalizeName(item.name);
+
+      // Skip duplicates within the batch
       if (seenNames.has(normalizedName)) {
-        console.log(`Skipping duplicate: "${item.name}" (already seen)`);
+        console.log(`Skipping duplicate: "${item.name}" (already in batch)`);
         skippedDuplicates++;
         return;
       }
       seenNames.add(normalizedName);
-      allParsedItems.push(item);
+
+      // Check if exists in database
+      const isInDb = (item.type === "menu_item" && menuNames.has(normalizedName)) ||
+        (item.type === "prep_recipe" && recipeNames.has(normalizedName));
+
+      allParsedItems.push({
+        ...item,
+        status: isInDb ? "duplicate_db" : "new",
+      });
     };
 
     try {
@@ -340,7 +369,7 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
     let successCount = 0;
 
     try {
-      for (const item of items) {
+      for (const item of items.filter(i => i.status !== "duplicate_db")) {
         if (item.type === "menu_item") {
           const { error } = await supabase.from("menu_items").insert({
             name: item.name,
@@ -507,6 +536,10 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
                                 <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200 text-xs">
                                   New
                                 </Badge>
+                              ) : item.status === "duplicate_db" ? (
+                                <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 text-xs flex items-center gap-1">
+                                  <AlertCircle className="w-3 h-3" /> In Database
+                                </Badge>
                               ) : (
                                 <Badge variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-200 text-xs flex items-center gap-1">
                                   <AlertCircle className="w-3 h-3" /> Dup
@@ -534,7 +567,7 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
                       ) : (
                         <Check className="mr-2 h-4 w-4" />
                       )}
-                      Import {items.length} Items
+                      Import {items.filter(i => i.status !== "duplicate_db").length} Items
                     </Button>
                   </div>
                 </div>
