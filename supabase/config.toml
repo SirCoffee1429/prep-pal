@@ -1,4 +1,4 @@
-project_id = "ucwactkevbbvjujraqbz"
+project_id = "dwhdrnwnanmywgyzfmik"
 
 [functions.parse-sales]
 verify_jwt = false
