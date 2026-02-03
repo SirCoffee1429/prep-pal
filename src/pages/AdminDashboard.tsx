@@ -24,12 +24,12 @@ const AdminDashboard = () => {
         return;
       }
 
-      // Verify admin role using the secure user_roles table
+      // Verify admin role
       const { data: roleData } = await supabase
         .from("user_roles")
         .select("role")
         .eq("user_id", session.user.id)
-        .eq("role", "admin" as const)
+        .eq("role", "admin")
         .maybeSingle();
 
       if (!roleData) {

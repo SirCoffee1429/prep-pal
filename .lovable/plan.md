@@ -1,129 +1,110 @@
 
-# Plan: Fix TypeScript Types for Supabase Migration
+# Plan: Add Password Reset Functionality
 
-## Problem Summary
-
-After disabling Lovable Cloud, the TypeScript types file (`src/integrations/supabase/types.ts`) is out of sync with your actual Supabase database. The `user_roles` table exists in the database but is missing from the types, causing build errors.
-
-**Build Errors:**
-- `TS2589: Type instantiation is excessively deep and possibly infinite`
-- `TS2769: Argument of type '"user_roles"' is not assignable to parameter of type 'never'`
-
----
+## Problem
+After disabling Lovable Cloud, you're unable to log in with "Invalid login credentials" error. The auth system is working, but the password needs to be reset.
 
 ## Solution
-
-Add the `user_roles` table definition to the TypeScript types file and align the admin verification logic to use a consistent table.
+Add a "Forgot Password" link to the login page that sends a password reset email via Supabase Auth.
 
 ---
 
-## Files to Modify
+## Changes
 
-| File | Change |
-|------|--------|
-| `src/integrations/supabase/types.ts` | Add `user_roles` table type definition |
-| `src/pages/AdminDashboard.tsx` | Update to use `users` table (consistent with AdminLogin) |
+### 1. Update AdminLogin.tsx
+
+Add a password reset flow with these changes:
+
+- Add a new state `showResetForm` to toggle between login and reset views
+- Add a `handlePasswordReset` function that calls `supabase.auth.resetPasswordForEmail()`
+- Add UI for the reset form (email input + submit button)
+- Add a "Forgot password?" link below the login form
+- After reset email is sent, show a success message
+
+### 2. Create ResetPassword.tsx (New Page)
+
+A new page to handle the password reset callback:
+
+- Route: `/admin/reset-password`
+- Captures the reset token from the URL
+- Displays a form to enter new password
+- Calls `supabase.auth.updateUser()` to set new password
+- Redirects to login on success
+
+### 3. Update App.tsx
+
+Add the new route for password reset:
+
+```text
+/admin/reset-password → ResetPassword component
+```
 
 ---
 
 ## Technical Details
 
-### 1. Update Types File
+**Password Reset Email Flow:**
+1. User clicks "Forgot password?" on login page
+2. User enters email, clicks "Send Reset Link"
+3. Supabase sends email with reset link pointing to `/admin/reset-password`
+4. User clicks link, lands on reset page with token in URL hash
+5. User enters new password and submits
+6. `supabase.auth.updateUser({ password })` saves new password
+7. User redirected to login page
 
-Add the `user_roles` table to the `Tables` section in `types.ts`:
-
+**Key Code (AdminLogin.tsx):**
 ```typescript
-user_roles: {
-  Row: {
-    id: string
-    user_id: string
-    role: Database["public"]["Enums"]["app_role"]
-    created_at: string
-  }
-  Insert: {
-    id?: string
-    user_id: string
-    role: Database["public"]["Enums"]["app_role"]
-    created_at?: string
-  }
-  Update: {
-    id?: string
-    user_id?: string
-    role?: Database["public"]["Enums"]["app_role"]
-    created_at?: string
-  }
-  Relationships: []
-}
+const handlePasswordReset = async () => {
+  const { error } = await supabase.auth.resetPasswordForEmail(email, {
+    redirectTo: `${window.location.origin}/admin/reset-password`,
+  });
+  
+  if (error) throw error;
+  
+  toast({
+    title: "Check your email",
+    description: "We've sent you a password reset link.",
+  });
+};
 ```
 
-### 2. Align Admin Verification (Recommended Alternative)
-
-Looking at the code, there are two tables being used inconsistently:
-- `AdminLogin.tsx` uses the `users` table with a `role` column
-- `AdminDashboard.tsx` uses the `user_roles` table
-
-**Option A - Use `users` table (simpler):**
-Update `AdminDashboard.tsx` to query the `users` table like `AdminLogin.tsx` does:
-
+**Key Code (ResetPassword.tsx):**
 ```typescript
-// Change from:
-const { data: roleData } = await supabase
-  .from("user_roles")
-  .select("role")
-  .eq("user_id", session.user.id)
-  .eq("role", "admin")
-  .maybeSingle();
+// Listen for auth state change with PASSWORD_RECOVERY event
+supabase.auth.onAuthStateChange(async (event) => {
+  if (event === "PASSWORD_RECOVERY") {
+    // Show password reset form
+  }
+});
 
-// To:
-const { data: roleData } = await supabase
-  .from("users")
-  .select("role")
-  .eq("id", session.user.id)
-  .eq("role", "admin")
-  .maybeSingle();
+const handleSubmit = async () => {
+  const { error } = await supabase.auth.updateUser({ 
+    password: newPassword 
+  });
+  
+  if (!error) {
+    navigate("/admin/login");
+  }
+};
 ```
-
-**Option B - Use `user_roles` table (follows best security practices):**
-Update `AdminLogin.tsx` to also use `user_roles` and update the types file.
 
 ---
 
-## Recommendation
+## Files to Create/Modify
 
-**Use Option A** for now - update `AdminDashboard.tsx` to use the `users` table. This:
-1. Fixes the build error immediately
-2. Is consistent with how `AdminLogin.tsx` already works
-3. Uses the table that already exists in your types file
-
-The `users` table already has the `role` column and is properly typed.
-
----
-
-## Implementation Steps
-
-1. **Modify `AdminDashboard.tsx`** (lines 27-33):
-   - Change `from("user_roles")` to `from("users")`
-   - Change `.eq("user_id", session.user.id)` to `.eq("id", session.user.id)`
-
-2. **Test the login flow** to verify admin access works correctly
+| File | Action |
+|------|--------|
+| `src/pages/AdminLogin.tsx` | Modify - Add forgot password link and reset email form |
+| `src/pages/ResetPassword.tsx` | Create - New page for setting new password |
+| `src/App.tsx` | Modify - Add `/admin/reset-password` route |
 
 ---
 
 ## After Implementation
 
-1. Navigate to `/admin/login`
-2. Use the password reset flow if needed (already implemented)
-3. Log in with your admin credentials
-4. Verify you can access the Admin Dashboard
-
----
-
-## Long-term: Regenerate Types from Supabase
-
-Once you have your Supabase CLI configured with your project, run:
-
-```bash
-supabase gen types typescript --project-id your-project-id > src/integrations/supabase/types.ts
-```
-
-This will generate accurate types matching your actual database schema.
+1. Go to `/admin/login`
+2. Click "Forgot password?"
+3. Enter `ryan@oldhawthorne.com`
+4. Check your email for the reset link
+5. Click the link and set a new password
+6. Log in with your new password

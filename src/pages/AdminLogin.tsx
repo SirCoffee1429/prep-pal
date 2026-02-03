@@ -43,13 +43,13 @@ const AdminLogin = () => {
 
         if (signInError) throw signInError;
 
-        // Add user record with admin role to user_roles table
+        // Add user record with admin role
         const { error: roleError } = await supabase
-          .from("user_roles")
-          .insert({ user_id: signInData.user.id, role: "admin" as const });
+          .from("users")
+          .insert({ id: signInData.user.id, email, role: "admin" });
 
         if (roleError) {
-          console.error("Error creating user role:", roleError);
+          console.error("Error creating user:", roleError);
           await supabase.auth.signOut();
           throw new Error("Failed to create admin user. Please try again.");
         }
@@ -69,12 +69,12 @@ const AdminLogin = () => {
 
         if (error) throw error;
 
-        // Verify admin role using the secure user_roles table
+        // Verify admin role
         const { data: roleData } = await supabase
-          .from("user_roles")
+          .from("users")
           .select("role")
-          .eq("user_id", data.user.id)
-          .eq("role", "admin" as const)
+          .eq("id", data.user.id)
+          .eq("role", "admin")
           .maybeSingle();
 
         if (!roleData) {
