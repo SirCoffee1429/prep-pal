@@ -1,119 +1,110 @@
 
+# Plan: Add Password Reset Functionality
 
-## Switch from Lovable AI Gateway to Google Gemini API Directly
+## Problem
+After disabling Lovable Cloud, you're unable to log in with "Invalid login credentials" error. The auth system is working, but the password needs to be reset.
 
-### Current State vs. Proposed
-
-| Current | Proposed |
-|---------|----------|
-| Uses `LOVABLE_API_KEY` | Uses `GEMINI_API_KEY` |
-| Gateway: `ai.gateway.lovable.dev` | Direct: `generativelanguage.googleapis.com` |
-| Subject to Lovable credit limits | Uses your own Google API quota |
-| 402 errors when credits exhausted | Independent billing via Google Cloud |
+## Solution
+Add a "Forgot Password" link to the login page that sends a password reset email via Supabase Auth.
 
 ---
 
-### Edge Functions to Update
+## Changes
 
-Two edge functions currently use the Lovable AI Gateway:
+### 1. Update AdminLogin.tsx
 
-1. **`supabase/functions/analyze-document/index.ts`** - Unified document parser (PDF/CSV/Excel)
-2. **`supabase/functions/parse-sales/index.ts`** - Sales report parser
+Add a password reset flow with these changes:
+
+- Add a new state `showResetForm` to toggle between login and reset views
+- Add a `handlePasswordReset` function that calls `supabase.auth.resetPasswordForEmail()`
+- Add UI for the reset form (email input + submit button)
+- Add a "Forgot password?" link below the login form
+- After reset email is sent, show a success message
+
+### 2. Create ResetPassword.tsx (New Page)
+
+A new page to handle the password reset callback:
+
+- Route: `/admin/reset-password`
+- Captures the reset token from the URL
+- Displays a form to enter new password
+- Calls `supabase.auth.updateUser()` to set new password
+- Redirects to login on success
+
+### 3. Update App.tsx
+
+Add the new route for password reset:
+
+```text
+/admin/reset-password → ResetPassword component
+```
 
 ---
 
-### Technical Changes
+## Technical Details
 
-#### 1. Update `analyze-document/index.ts`
+**Password Reset Email Flow:**
+1. User clicks "Forgot password?" on login page
+2. User enters email, clicks "Send Reset Link"
+3. Supabase sends email with reset link pointing to `/admin/reset-password`
+4. User clicks link, lands on reset page with token in URL hash
+5. User enters new password and submits
+6. `supabase.auth.updateUser({ password })` saves new password
+7. User redirected to login page
 
-**Change API key reference:**
+**Key Code (AdminLogin.tsx):**
 ```typescript
-// Before
-const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-
-// After
-const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
-if (!GEMINI_API_KEY) {
-  return errorResponse("GEMINI_API_KEY not configured", 500);
-}
+const handlePasswordReset = async () => {
+  const { error } = await supabase.auth.resetPasswordForEmail(email, {
+    redirectTo: `${window.location.origin}/admin/reset-password`,
+  });
+  
+  if (error) throw error;
+  
+  toast({
+    title: "Check your email",
+    description: "We've sent you a password reset link.",
+  });
+};
 ```
 
-**Change endpoint and model names:**
+**Key Code (ResetPassword.tsx):**
 ```typescript
-// Before
-const model = isPDF ? "google/gemini-2.5-pro" : "google/gemini-2.5-flash";
-await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-  headers: { Authorization: `Bearer ${LOVABLE_API_KEY}` },
-  body: JSON.stringify({ model, ... })
-});
-
-// After
-const model = isPDF ? "gemini-2.5-pro-preview-05-06" : "gemini-2.5-flash-preview-05-20";
-await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`, {
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({
-    contents: [...],
-    generationConfig: { responseMimeType: "application/json" }
-  })
-});
-```
-
-**Update request body format** (Google API uses different structure):
-```typescript
-// Google Gemini API format
-{
-  contents: [
-    { role: "user", parts: [{ text: systemPrompt + "\n\n" + userContent }] }
-  ],
-  generationConfig: {
-    responseMimeType: "application/json",
-    temperature: 0.1
+// Listen for auth state change with PASSWORD_RECOVERY event
+supabase.auth.onAuthStateChange(async (event) => {
+  if (event === "PASSWORD_RECOVERY") {
+    // Show password reset form
   }
-}
+});
 
-// For PDFs with vision:
-{
-  contents: [{
-    role: "user",
-    parts: [
-      { text: "Analyze this document..." },
-      { inlineData: { mimeType: "application/pdf", data: base64Content } }
-    ]
-  }]
-}
+const handleSubmit = async () => {
+  const { error } = await supabase.auth.updateUser({ 
+    password: newPassword 
+  });
+  
+  if (!error) {
+    navigate("/admin/login");
+  }
+};
 ```
 
 ---
 
-#### 2. Update `parse-sales/index.ts`
+## Files to Create/Modify
 
-Same pattern - switch from `LOVABLE_API_KEY` to `GEMINI_API_KEY` and update the API endpoint/format.
-
----
-
-### Google Gemini Model Mapping
-
-| Lovable Gateway Model | Direct Google API Model |
-|----------------------|-------------------------|
-| `google/gemini-2.5-pro` | `gemini-2.5-pro-preview-05-06` |
-| `google/gemini-2.5-flash` | `gemini-2.5-flash-preview-05-20` |
-| `google/gemini-3-flash-preview` | `gemini-2.5-flash-preview-05-20` |
+| File | Action |
+|------|--------|
+| `src/pages/AdminLogin.tsx` | Modify - Add forgot password link and reset email form |
+| `src/pages/ResetPassword.tsx` | Create - New page for setting new password |
+| `src/App.tsx` | Modify - Add `/admin/reset-password` route |
 
 ---
 
-### File Changes Summary
+## After Implementation
 
-| File | Action | Description |
-|------|--------|-------------|
-| `supabase/functions/analyze-document/index.ts` | UPDATE | Switch to Google Gemini API directly using `GEMINI_API_KEY` |
-| `supabase/functions/parse-sales/index.ts` | UPDATE | Switch to Google Gemini API directly using `GEMINI_API_KEY` |
-
----
-
-### Benefits
-
-- No more 402 "credits exhausted" errors from Lovable
-- Use your own Google Cloud billing/quota
-- Direct control over API costs
-- Same Gemini models, just accessed directly
-
+1. Go to `/admin/login`
+2. Click "Forgot password?"
+3. Enter `ryan@oldhawthorne.com`
+4. Check your email for the reset link
+5. Click the link and set a new password
+6. Log in with your new password
