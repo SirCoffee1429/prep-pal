@@ -15,6 +15,8 @@ const AdminLogin = () => {
   const [password, setPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isSignUp, setIsSignUp] = useState(false);
+  const [showResetForm, setShowResetForm] = useState(false);
+  const [resetEmailSent, setResetEmailSent] = useState(false);
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -97,6 +99,109 @@ const AdminLogin = () => {
     }
   };
 
+  const handlePasswordReset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsLoading(true);
+
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/admin/reset-password`,
+      });
+
+      if (error) throw error;
+
+      setResetEmailSent(true);
+      toast({
+        title: "Check your email",
+        description: "We've sent you a password reset link.",
+      });
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to send reset email",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  if (showResetForm) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center bg-background p-6">
+        <Button
+          variant="ghost"
+          className="absolute left-4 top-4"
+          onClick={() => {
+            setShowResetForm(false);
+            setResetEmailSent(false);
+          }}
+        >
+          <ArrowLeft className="mr-2 h-4 w-4" />
+          Back to Login
+        </Button>
+
+        <Card className="w-full max-w-md border-border bg-card">
+          <CardHeader className="text-center">
+            <CardTitle className="font-display text-2xl">
+              Reset Password
+            </CardTitle>
+            <CardDescription>
+              {resetEmailSent
+                ? "Check your email for the reset link"
+                : "Enter your email to receive a reset link"}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {resetEmailSent ? (
+              <div className="space-y-4 text-center">
+                <p className="text-muted-foreground">
+                  We've sent a password reset link to <strong>{email}</strong>.
+                  Click the link in the email to set a new password.
+                </p>
+                <Button
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => {
+                    setShowResetForm(false);
+                    setResetEmailSent(false);
+                  }}
+                >
+                  Return to Login
+                </Button>
+              </div>
+            ) : (
+              <form onSubmit={handlePasswordReset} className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="reset-email">Email</Label>
+                  <Input
+                    id="reset-email"
+                    type="email"
+                    placeholder="chef@example.com"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    required
+                    className="h-12"
+                  />
+                </div>
+                <Button
+                  type="submit"
+                  className="h-12 w-full text-lg"
+                  disabled={isLoading}
+                >
+                  {isLoading ? (
+                    <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                  ) : null}
+                  Send Reset Link
+                </Button>
+              </form>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-background p-6">
       <Button
@@ -158,7 +263,17 @@ const AdminLogin = () => {
             </Button>
           </form>
 
-          <div className="mt-6 text-center">
+          <div className="mt-4 text-center">
+            <button
+              type="button"
+              onClick={() => setShowResetForm(true)}
+              className="text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+            >
+              Forgot password?
+            </button>
+          </div>
+
+          <div className="mt-4 text-center">
             <button
               type="button"
               onClick={() => setIsSignUp(!isSignUp)}
