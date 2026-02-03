@@ -41,15 +41,15 @@ const AdminLogin = () => {
 
         if (signInError) throw signInError;
 
-        // Add admin role for new user
+        // Add user record with admin role
         const { error: roleError } = await supabase
-          .from("user_roles")
-          .insert({ user_id: signInData.user.id, role: "admin" });
+          .from("users")
+          .insert({ id: signInData.user.id, email, role: "admin" });
 
         if (roleError) {
-          console.error("Error assigning role:", roleError);
+          console.error("Error creating user:", roleError);
           await supabase.auth.signOut();
-          throw new Error("Failed to assign admin role. Please try again.");
+          throw new Error("Failed to create admin user. Please try again.");
         }
 
         toast({
@@ -69,9 +69,9 @@ const AdminLogin = () => {
 
         // Verify admin role
         const { data: roleData } = await supabase
-          .from("user_roles")
+          .from("users")
           .select("role")
-          .eq("user_id", data.user.id)
+          .eq("id", data.user.id)
           .eq("role", "admin")
           .maybeSingle();
 
