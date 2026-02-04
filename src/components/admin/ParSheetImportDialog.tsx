@@ -68,6 +68,7 @@ const ParSheetImportDialog = ({
   const { toast } = useToast();
   const [step, setStep] = useState<"upload" | "review" | "importing">("upload");
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isLoadingItems, setIsLoadingItems] = useState(false);
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
   const [reviewItems, setReviewItems] = useState<ReviewItem[]>([]);
   const [importDay, setImportDay] = useState(selectedDay);
@@ -75,13 +76,27 @@ const ParSheetImportDialog = ({
 
   // Fetch menu items when dialog opens
   const fetchMenuItems = useCallback(async () => {
-    const { data } = await supabase
-      .from("menu_items")
-      .select("id, name")
-      .eq("is_active", true)
-      .order("name");
-    setMenuItems(data || []);
-  }, []);
+    setIsLoadingItems(true);
+    try {
+      const { data } = await supabase
+        .from("menu_items")
+        .select("id, name")
+        .eq("is_active", true)
+        .order("name");
+      setMenuItems(data || []);
+
+      // Check immediately after fetch if no items
+      if (!data || data.length === 0) {
+        toast({
+          title: "No Menu Items Available",
+          description: "Please import menu items first before importing par levels.",
+          variant: "destructive",
+        });
+      }
+    } finally {
+      setIsLoadingItems(false);
+    }
+  }, [toast]);
 
   // Handle dialog open
   const handleOpenChange = (newOpen: boolean) => {
@@ -97,7 +112,7 @@ const ParSheetImportDialog = ({
   // Read file content
   const readFileContent = async (file: File): Promise<{ content: string; isBase64: boolean }> => {
     const fileName = file.name.toLowerCase();
-    
+
     if (fileName.endsWith(".pdf")) {
       // Read as base64 for PDF
       return new Promise((resolve, reject) => {
@@ -118,13 +133,13 @@ const ParSheetImportDialog = ({
             const data = new Uint8Array(e.target?.result as ArrayBuffer);
             const workbook = XLSX.read(data, { type: "array" });
             let textContent = "";
-            
+
             workbook.SheetNames.forEach((sheetName) => {
               const sheet = workbook.Sheets[sheetName];
               textContent += `Sheet: ${sheetName}\n`;
               textContent += XLSX.utils.sheet_to_csv(sheet) + "\n\n";
             });
-            
+
             resolve({ content: textContent, isBase64: false });
           } catch (err) {
             reject(err);
@@ -149,12 +164,12 @@ const ParSheetImportDialog = ({
   // Process uploaded file
   const handleFileUpload = async (file: File) => {
     setIsProcessing(true);
-    
+
     try {
       const { content, isBase64 } = await readFileContent(file);
-      
+
       const mimeType = isBase64 ? "application/pdf" : "text/csv";
-      
+
       const { data, error } = await supabase.functions.invoke("analyze-document", {
         body: {
           fileContent: content,
@@ -177,21 +192,11 @@ const ParSheetImportDialog = ({
       }
 
       const parsedItems: ParsedItem[] = data.data?.items || [];
-      
+
       if (parsedItems.length === 0) {
         toast({
           title: "No items found",
           description: "Could not extract any par level data from the file.",
-          variant: "destructive",
-        });
-        return;
-      }
-
-      // Check if menu items exist before proceeding to review
-      if (menuItems.length === 0) {
-        toast({
-          title: "No Menu Items Available",
-          description: "Please import menu items first before importing par levels.",
           variant: "destructive",
         });
         return;
@@ -211,7 +216,7 @@ const ParSheetImportDialog = ({
 
       setReviewItems(reviews);
       setStep("review");
-      
+
       toast({
         title: "File parsed",
         description: `Found ${parsedItems.length} items`,
@@ -233,7 +238,7 @@ const ParSheetImportDialog = ({
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setDragActive(false);
-    
+
     const file = e.dataTransfer.files[0];
     if (file) handleFileUpload(file);
   }, [menuItems]);
@@ -269,10 +274,10 @@ const ParSheetImportDialog = ({
       prev.map((item, i) =>
         i === index
           ? {
-              ...item,
-              manualMatchId: menuItemId || null,
-              selected: menuItemId ? true : item.selected,
-            }
+            ...item,
+            manualMatchId: menuItemId || null,
+            selected: menuItemId ? true : item.selected,
+          }
           : item
       )
     );
@@ -362,11 +367,10 @@ const ParSheetImportDialog = ({
         {step === "upload" && (
           <div className="flex-1 flex flex-col gap-4">
             <div
-              className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
-                dragActive
-                  ? "border-primary bg-primary/5"
-                  : "border-muted-foreground/25 hover:border-primary/50"
-              }`}
+              className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${dragActive
+                ? "border-primary bg-primary/5"
+                : "border-muted-foreground/25 hover:border-primary/50"
+                }`}
               onDragOver={(e) => {
                 e.preventDefault();
                 setDragActive(true);
@@ -374,10 +378,18 @@ const ParSheetImportDialog = ({
               onDragLeave={() => setDragActive(false)}
               onDrop={handleDrop}
             >
-              {isProcessing ? (
+              {isProcessing || isLoadingItems ? (
                 <div className="flex flex-col items-center gap-3">
                   <Loader2 className="h-10 w-10 animate-spin text-primary" />
-                  <p className="text-sm text-muted-foreground">Processing file...</p>
+                  <p className="text-sm text-muted-foreground">
+                    {isLoadingItems ? "Loading menu items..." : "Processing file..."}
+                  </p>
+                </div>
+              ) : menuItems.length === 0 ? (
+                <div className="flex flex-col items-center gap-3 text-muted-foreground">
+                  <AlertCircle className="h-10 w-10 text-destructive" />
+                  <p className="font-medium">No Menu Items Available</p>
+                  <p className="text-sm">Please import menu items first before importing par levels.</p>
                 </div>
               ) : (
                 <label className="cursor-pointer">
@@ -451,11 +463,10 @@ const ParSheetImportDialog = ({
                   return (
                     <div
                       key={index}
-                      className={`p-3 rounded-md border transition-colors ${
-                        item.selected && menuItemId
-                          ? "bg-primary/5 border-primary/20"
-                          : "bg-muted/30"
-                      }`}
+                      className={`p-3 rounded-md border transition-colors ${item.selected && menuItemId
+                        ? "bg-primary/5 border-primary/20"
+                        : "bg-muted/30"
+                        }`}
                     >
                       <div className="flex items-start gap-3">
                         <Checkbox
