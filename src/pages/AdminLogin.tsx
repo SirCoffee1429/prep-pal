@@ -45,8 +45,8 @@ const AdminLogin = () => {
 
         // Add user record with admin role
         const { error: roleError } = await supabase
-          .from("users")
-          .insert({ id: signInData.user.id, email, role: "admin" });
+          .from("user_roles")
+          .insert({ user_id: signInData.user.id, role: "admin" });
 
         if (roleError) {
           console.error("Error creating user:", roleError);
@@ -71,9 +71,9 @@ const AdminLogin = () => {
 
         // Verify admin role
         const { data: roleData } = await supabase
-          .from("users")
+          .from("user_roles")
           .select("role")
-          .eq("id", data.user.id)
+          .eq("user_id", data.user.id)
           .eq("role", "admin")
           .maybeSingle();
 
