@@ -211,14 +211,20 @@ const MenuItemManagement = () => {
     setIsDeleting(true);
     try {
       // Delete related par_levels and prep_list_items first (foreign key constraints)
-      await supabase.from("par_levels").delete().neq("id", "00000000-0000-0000-0000-000000000000");
-      await supabase.from("prep_list_items").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+      const { error: parError } = await supabase.from("par_levels").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+      if (parError) console.error("Error deleting par_levels:", parError);
+
+      const { error: prepError } = await supabase.from("prep_list_items").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+      if (prepError) console.error("Error deleting prep_list_items:", prepError);
 
       const { error } = await supabase.from("menu_items").delete().neq("id", "00000000-0000-0000-0000-000000000000");
       if (error) throw error;
 
+
+      // Clear local state immediately for responsive UI
+      setMenuItems([]);
+
       toast({ title: "Success", description: "All menu items deleted" });
-      fetchData();
     } catch (error) {
       console.error("Error deleting:", error);
       toast({
@@ -226,6 +232,8 @@ const MenuItemManagement = () => {
         description: "Failed to delete menu items",
         variant: "destructive",
       });
+      // Refresh to get actual state
+      fetchData();
     } finally {
       setIsDeleting(false);
     }

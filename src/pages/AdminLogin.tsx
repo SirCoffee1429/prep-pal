@@ -69,15 +69,16 @@ const AdminLogin = () => {
 
         if (error) throw error;
 
-        // Verify admin role
-        const { data: roleData } = await supabase
+        // Verify admin role - fetch user record and check role in code
+        const { data: userData, error: userError } = await supabase
           .from("users")
           .select("role")
           .eq("id", data.user.id)
-          .eq("role", "admin")
           .maybeSingle();
 
-        if (!roleData) {
+        console.log("User lookup result:", { userData, userError, userId: data.user.id });
+
+        if (userError || !userData || userData.role !== "admin") {
           await supabase.auth.signOut();
           throw new Error("You do not have admin access.");
         }
