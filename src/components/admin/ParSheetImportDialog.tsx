@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import {
   Dialog,
@@ -121,17 +121,16 @@ const ParSheetImportDialog = ({
     }
   }, [toast]);
 
-  // Handle dialog open
-  const handleOpenChange = (newOpen: boolean) => {
-    if (newOpen) {
-      setMenuItemsError(null);
-      fetchMenuItems();
+  // Trigger fetch when dialog opens via prop change
+  useEffect(() => {
+    if (open) {
       setStep("upload");
       setReviewItems([]);
       setImportDay(selectedDay);
+      setMenuItemsError(null);
+      fetchMenuItems();
     }
-    onOpenChange(newOpen);
-  };
+  }, [open, selectedDay, fetchMenuItems]);
 
   // Read file content
   const readFileContent = async (file: File): Promise<{ content: string; isBase64: boolean }> => {
@@ -376,7 +375,7 @@ const ParSheetImportDialog = ({
   const matchedCount = reviewItems.filter((item) => item.matchResult.confidence !== "none" || item.manualMatchId).length;
 
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl max-h-[85vh] flex flex-col">
         <DialogHeader>
           <DialogTitle>Import Par Sheet</DialogTitle>
