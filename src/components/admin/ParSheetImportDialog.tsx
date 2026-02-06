@@ -376,7 +376,7 @@ const ParSheetImportDialog = ({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[85vh] flex flex-col">
+      <DialogContent className="max-w-2xl max-h-[85vh] flex flex-col overflow-hidden">
         <DialogHeader>
           <DialogTitle>Import Par Sheet</DialogTitle>
           <DialogDescription>
@@ -482,7 +482,7 @@ const ParSheetImportDialog = ({
             </div>
 
             {/* Items List */}
-            <ScrollArea className="flex-1 h-[40vh] border rounded-md">
+            <ScrollArea className="flex-1 min-h-0 max-h-[50vh] border rounded-md">
               <div className="p-2 space-y-2">
                 {reviewItems.map((item, index) => {
                   const menuItemId = getMenuItemId(item);
