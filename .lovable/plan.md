@@ -1,102 +1,69 @@
 
-# Plan: Restore Backend to Work with Lovable Cloud
+## Diagnosis (root cause)
+The “No Menu Items Available” message is not coming from the database being empty. Your database has active menu items (79), and the app is successfully able to fetch them elsewhere (the Par Levels table is already showing items).
 
-## Problem Summary
+The actual bug is in **how `ParSheetImportDialog` triggers the fetch**:
 
-The admin authentication is broken because the code references a `users` table that doesn't exist in the database. The actual database has a `user_roles` table with proper RLS policies and a `has_role` helper function.
+- `ParManagement` opens the dialog by setting `open` state (`setImportDialogOpen(true)`).
+- `ParSheetImportDialog` currently fetches menu items only inside `handleOpenChange(newOpen)`.
+- **But `handleOpenChange` is only called when the Dialog itself requests an open-state change** (escape key, clicking overlay, internal close), not when the parent flips `open` from `false → true`.
+- Result: when you open the dialog from the button, **the fetch never runs**, `menuItems` stays `[]`, and the UI shows the empty-state (“No Menu Items Available”).
 
-| Current Code | Actual Database |
-|--------------|-----------------|
-| Queries `users` table | Has `user_roles` table |
-| Checks `role` column on `users` | Uses `user_id` + `role` in `user_roles` |
-| Insert creates user record with role | Should insert into `user_roles` only |
+This perfectly matches the screenshot: you see the empty-state (not the spinner, not an error), meaning no fetch ran.
 
-## Existing Database Setup (Already Correct)
+## Fix strategy
+Trigger the menu item fetch when the `open` prop becomes `true`, not only via `onOpenChange`.
 
-Your Lovable Cloud database already has the proper security-first setup:
+We’ll add a `useEffect` watching `open`:
+- When `open === true`:
+  - Reset dialog state (`step`, `reviewItems`, `importDay`, `menuItemsError`)
+  - Call `fetchMenuItems()`
 
-```text
-Table: user_roles
-- id (uuid, primary key)
-- user_id (uuid, references auth.users)
-- role (app_role enum: 'admin' | 'staff')
-- created_at (timestamp)
+We’ll keep `onOpenChange` as a pure “propagate to parent” handler.
 
-Function: has_role(_user_id, _role)
-- Returns boolean
-- Security definer (bypasses RLS safely)
-```
+## Implementation steps (code changes)
+### 1) Update `src/components/admin/ParSheetImportDialog.tsx`
+- Add `useEffect` import.
+- Add:
 
-## Changes Required
+  - `useEffect(() => { if (open) { ... } }, [open, selectedDay, fetchMenuItems])`
 
-### 1. Fix AdminLogin.tsx
+- Inside the effect when opening:
+  - `setStep("upload")`
+  - `setReviewItems([])`
+  - `setImportDay(selectedDay)` (ensures the day defaults correctly every time)
+  - `setMenuItemsError(null)`
+  - call `fetchMenuItems()`
 
-**Sign Up Flow** (lines 46-55):
-- Change from inserting into `users` table
-- Insert into `user_roles` with the authenticated user's ID
+- Simplify `handleOpenChange` to:
+  - `onOpenChange(newOpen)`
+  - optionally clear local state on close (not required, but nice hygiene)
 
-**Login Flow** (lines 73-78):
-- Change from querying `users` table
-- Query `user_roles` to verify admin role
+### 2) Verify behavior in UI
+After change, opening “Import Par Sheet” should:
+- briefly show “Loading menu items…” spinner
+- then show the drop zone (because `menuItems.length > 0`)
+- and allow file selection/drop.
 
-### 2. Fix AdminDashboard.tsx
+## Verification checklist (“hot kitchen” pre-mortem)
+What can still break and how we prevent it:
 
-**Auth Check** (lines 28-33):
-- Change from querying `users` table
-- Query `user_roles` to verify admin role
+1) **Menu fetch never runs** (current bug)
+   - Prevented: `useEffect` guarantees fetch on `open===true`.
 
-### 3. Add Admin Role for Your Account
+2) **Dialog shows empty-state too quickly**
+   - Prevented: `isLoadingItems` is set before the request; UI shows spinner instead of “No Menu Items”.
 
-After the code fix, you'll need to add your user ID to the `user_roles` table. Since there's already one admin entry in the database (user_id: `9c6f2246-2689-4928-84ff-5cc724d5b6eb`), we need to either:
-- Create a new account and it will get the admin role automatically
-- Or I can check if you have an existing auth account and add the role
+3) **Selected day mismatch**
+   - Prevented: we reset `importDay` to `selectedDay` on every open.
 
-## Technical Details
+4) **Auth / permissions issues**
+   - If menu item fetch fails, new UI will show the concrete error via `menuItemsError`.
 
-### AdminLogin.tsx Changes
+## Scope
+Only frontend code changes required.
+No database/RLS changes required.
 
-```typescript
-// SIGNUP: Insert role into user_roles (not users)
-const { error: roleError } = await supabase
-  .from("user_roles")
-  .insert({ user_id: signInData.user.id, role: "admin" });
-
-// LOGIN: Check role in user_roles (not users)
-const { data: roleData } = await supabase
-  .from("user_roles")
-  .select("role")
-  .eq("user_id", data.user.id)
-  .eq("role", "admin")
-  .maybeSingle();
-```
-
-### AdminDashboard.tsx Changes
-
-```typescript
-// AUTH CHECK: Query user_roles (not users)
-const { data: roleData } = await supabase
-  .from("user_roles")
-  .select("role")
-  .eq("user_id", session.user.id)
-  .eq("role", "admin")
-  .maybeSingle();
-```
-
-## Files to Modify
-
-| File | Changes |
-|------|---------|
-| `src/pages/AdminLogin.tsx` | Update signup insert and login query to use `user_roles` |
-| `src/pages/AdminDashboard.tsx` | Update auth check query to use `user_roles` |
-
-## Expected Outcome
-
-After these changes:
-1. New admin signups will correctly insert into `user_roles`
-2. Login will verify admin role from `user_roles`
-3. Dashboard access will be properly protected
-4. The existing `has_role` function and RLS policies will work correctly
-
-## Post-Implementation Step
-
-Once the code is fixed, you can sign up with a new admin account or I can help add your existing user to the `user_roles` table.
+## Deliverables
+- One-file patch:
+  - `src/components/admin/ParSheetImportDialog.tsx`
