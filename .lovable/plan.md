@@ -1,71 +1,102 @@
 
-# Plan: Fix AdminDashboard to Use `users` Table
+# Plan: Restore Backend to Work with Lovable Cloud
 
-## Problem
+## Problem Summary
 
-The build is failing because `AdminDashboard.tsx` references `user_roles` table which doesn't exist in the TypeScript types. Your database uses a `users` table instead.
+The admin authentication is broken because the code references a `users` table that doesn't exist in the database. The actual database has a `user_roles` table with proper RLS policies and a `has_role` helper function.
 
-**Build Error:**
+| Current Code | Actual Database |
+|--------------|-----------------|
+| Queries `users` table | Has `user_roles` table |
+| Checks `role` column on `users` | Uses `user_id` + `role` in `user_roles` |
+| Insert creates user record with role | Should insert into `user_roles` only |
+
+## Existing Database Setup (Already Correct)
+
+Your Lovable Cloud database already has the proper security-first setup:
+
+```text
+Table: user_roles
+- id (uuid, primary key)
+- user_id (uuid, references auth.users)
+- role (app_role enum: 'admin' | 'staff')
+- created_at (timestamp)
+
+Function: has_role(_user_id, _role)
+- Returns boolean
+- Security definer (bypasses RLS safely)
 ```
-src/pages/AdminDashboard.tsx(28,40): error TS2589: Type instantiation is excessively deep
-Argument of type '"user_roles"' is not assignable to parameter of type 'never'
-```
 
-## Current State
+## Changes Required
 
-| Component | Table Used | Column Used | Status |
-|-----------|------------|-------------|--------|
-| AdminLogin.tsx | `users` | `id` | Correct |
-| AdminDashboard.tsx | `user_roles` | `user_id` | Wrong - needs fix |
-| TypeScript Types | `users` | `id` | Correct |
+### 1. Fix AdminLogin.tsx
 
-## Solution
+**Sign Up Flow** (lines 46-55):
+- Change from inserting into `users` table
+- Insert into `user_roles` with the authenticated user's ID
 
-Update `AdminDashboard.tsx` to query the `users` table instead of `user_roles`, matching how `AdminLogin.tsx` works.
+**Login Flow** (lines 73-78):
+- Change from querying `users` table
+- Query `user_roles` to verify admin role
 
----
+### 2. Fix AdminDashboard.tsx
 
-## Changes
+**Auth Check** (lines 28-33):
+- Change from querying `users` table
+- Query `user_roles` to verify admin role
 
-### File: `src/pages/AdminDashboard.tsx`
+### 3. Add Admin Role for Your Account
 
-**Lines 28-33 - Change the role verification query:**
+After the code fix, you'll need to add your user ID to the `user_roles` table. Since there's already one admin entry in the database (user_id: `9c6f2246-2689-4928-84ff-5cc724d5b6eb`), we need to either:
+- Create a new account and it will get the admin role automatically
+- Or I can check if you have an existing auth account and add the role
+
+## Technical Details
+
+### AdminLogin.tsx Changes
 
 ```typescript
-// FROM (current - broken):
+// SIGNUP: Insert role into user_roles (not users)
+const { error: roleError } = await supabase
+  .from("user_roles")
+  .insert({ user_id: signInData.user.id, role: "admin" });
+
+// LOGIN: Check role in user_roles (not users)
+const { data: roleData } = await supabase
+  .from("user_roles")
+  .select("role")
+  .eq("user_id", data.user.id)
+  .eq("role", "admin")
+  .maybeSingle();
+```
+
+### AdminDashboard.tsx Changes
+
+```typescript
+// AUTH CHECK: Query user_roles (not users)
 const { data: roleData } = await supabase
   .from("user_roles")
   .select("role")
   .eq("user_id", session.user.id)
   .eq("role", "admin")
   .maybeSingle();
-
-// TO (fixed):
-const { data: roleData } = await supabase
-  .from("users")
-  .select("role")
-  .eq("id", session.user.id)
-  .eq("role", "admin")
-  .maybeSingle();
 ```
 
-**Key changes:**
-1. Table: `user_roles` → `users`
-2. Column: `user_id` → `id`
+## Files to Modify
 
----
+| File | Changes |
+|------|---------|
+| `src/pages/AdminLogin.tsx` | Update signup insert and login query to use `user_roles` |
+| `src/pages/AdminDashboard.tsx` | Update auth check query to use `user_roles` |
 
-## Files Modified
+## Expected Outcome
 
-| File | Change |
-|------|--------|
-| `src/pages/AdminDashboard.tsx` | Update role check to use `users` table |
+After these changes:
+1. New admin signups will correctly insert into `user_roles`
+2. Login will verify admin role from `user_roles`
+3. Dashboard access will be properly protected
+4. The existing `has_role` function and RLS policies will work correctly
 
----
+## Post-Implementation Step
 
-## Verification
-
-After this change:
-1. Build errors will be resolved
-2. Admin login flow will work end-to-end
-3. Both AdminLogin and AdminDashboard will use the same `users` table consistently
+Once the code is fixed, you can sign up with a new admin account or I can help add your existing user to the `user_roles` table.
