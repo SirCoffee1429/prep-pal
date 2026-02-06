@@ -69,6 +69,7 @@ const ParSheetImportDialog = ({
   const [step, setStep] = useState<"upload" | "review" | "importing">("upload");
   const [isProcessing, setIsProcessing] = useState(false);
   const [isLoadingItems, setIsLoadingItems] = useState(false);
+  const [menuItemsError, setMenuItemsError] = useState<string | null>(null);
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
   const [reviewItems, setReviewItems] = useState<ReviewItem[]>([]);
   const [importDay, setImportDay] = useState(selectedDay);
@@ -77,15 +78,28 @@ const ParSheetImportDialog = ({
   // Fetch menu items when dialog opens
   const fetchMenuItems = useCallback(async () => {
     setIsLoadingItems(true);
+    setMenuItemsError(null);
     try {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from("menu_items")
         .select("id, name")
         .eq("is_active", true)
         .order("name");
+
+      if (error) {
+        console.error("Error loading menu items:", error);
+        setMenuItems([]);
+        setMenuItemsError(error.message || "Failed to load menu items");
+        toast({
+          title: "Failed to load menu items",
+          description: error.message,
+          variant: "destructive",
+        });
+        return;
+      }
+
       setMenuItems(data || []);
 
-      // Check immediately after fetch if no items
       if (!data || data.length === 0) {
         toast({
           title: "No Menu Items Available",
@@ -93,6 +107,15 @@ const ParSheetImportDialog = ({
           variant: "destructive",
         });
       }
+    } catch (err) {
+      console.error("Error loading menu items:", err);
+      setMenuItems([]);
+      setMenuItemsError(err instanceof Error ? err.message : "Failed to load menu items");
+      toast({
+        title: "Failed to load menu items",
+        description: err instanceof Error ? err.message : "Failed to load menu items",
+        variant: "destructive",
+      });
     } finally {
       setIsLoadingItems(false);
     }
@@ -101,6 +124,7 @@ const ParSheetImportDialog = ({
   // Handle dialog open
   const handleOpenChange = (newOpen: boolean) => {
     if (newOpen) {
+      setMenuItemsError(null);
       fetchMenuItems();
       setStep("upload");
       setReviewItems([]);
@@ -384,6 +408,13 @@ const ParSheetImportDialog = ({
                   <p className="text-sm text-muted-foreground">
                     {isLoadingItems ? "Loading menu items..." : "Processing file..."}
                   </p>
+                </div>
+              ) : menuItemsError ? (
+                <div className="flex flex-col items-center gap-3 text-muted-foreground">
+                  <AlertCircle className="h-10 w-10 text-destructive" />
+                  <p className="font-medium">Couldn't load menu items</p>
+                  <p className="text-sm">{menuItemsError}</p>
+                  <p className="text-sm">Try refreshing the page or logging in again.</p>
                 </div>
               ) : menuItems.length === 0 ? (
                 <div className="flex flex-col items-center gap-3 text-muted-foreground">
