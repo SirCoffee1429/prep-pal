@@ -1,29 +1,10 @@
-To resolve the issue where the list of items isn't scrollable, I will replace the custom `ScrollArea` component with a standard HTML `div` that has `overflow-y-auto`. This is often more robust for complex flex layouts within dialogs.
-
-Here is the updated code for `src/components/admin/ParSheetImportDialog.tsx`.
-
-### 📄 Copy & Paste this into `src/components/admin/ParSheetImportDialog.tsx`
-
-```tsx
 import { useState, useCallback, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2, Upload, FileSpreadsheet, Check, AlertCircle } from "lucide-react";
 import { findBestMatch, getConfidenceColor, getConfidenceLabel, MatchResult } from "@/lib/itemMatching";
@@ -65,12 +46,7 @@ const DAYS = [
   { value: 6, label: "Saturday" },
 ];
 
-const ParSheetImportDialog = ({
-  open,
-  onOpenChange,
-  selectedDay,
-  onImportComplete,
-}: ParSheetImportDialogProps) => {
+const ParSheetImportDialog = ({ open, onOpenChange, selectedDay, onImportComplete }: ParSheetImportDialogProps) => {
   const { toast } = useToast();
   const [step, setStep] = useState<"upload" | "review" | "importing">("upload");
   const [isProcessing, setIsProcessing] = useState(false);
@@ -86,11 +62,7 @@ const ParSheetImportDialog = ({
     setIsLoadingItems(true);
     setMenuItemsError(null);
     try {
-      const { data, error } = await supabase
-        .from("menu_items")
-        .select("id, name")
-        .eq("is_active", true)
-        .order("name");
+      const { data, error } = await supabase.from("menu_items").select("id, name").eq("is_active", true).order("name");
 
       if (error) {
         console.error("Error loading menu items:", error);
@@ -250,7 +222,6 @@ const ParSheetImportDialog = ({
         title: "File parsed",
         description: `Found ${parsedItems.length} items`,
       });
-
     } catch (err) {
       console.error("Error processing file:", err);
       toast({
@@ -264,13 +235,16 @@ const ParSheetImportDialog = ({
   };
 
   // Handle file drop
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setDragActive(false);
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      setDragActive(false);
 
-    const file = e.dataTransfer.files[0];
-    if (file) handleFileUpload(file);
-  }, [menuItems]);
+      const file = e.dataTransfer.files[0];
+      if (file) handleFileUpload(file);
+    },
+    [menuItems],
+  );
 
   // Handle file input change
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -280,11 +254,7 @@ const ParSheetImportDialog = ({
 
   // Toggle item selection
   const toggleItemSelection = (index: number) => {
-    setReviewItems((prev) =>
-      prev.map((item, i) =>
-        i === index ? { ...item, selected: !item.selected } : item
-      )
-    );
+    setReviewItems((prev) => prev.map((item, i) => (i === index ? { ...item, selected: !item.selected } : item)));
   };
 
   // Toggle all items
@@ -293,7 +263,7 @@ const ParSheetImportDialog = ({
       prev.map((item) => ({
         ...item,
         selected: selected && (item.matchResult.confidence !== "none" || item.manualMatchId !== null),
-      }))
+      })),
     );
   };
 
@@ -303,22 +273,18 @@ const ParSheetImportDialog = ({
       prev.map((item, i) =>
         i === index
           ? {
-            ...item,
-            manualMatchId: menuItemId || null,
-            selected: menuItemId ? true : item.selected,
-          }
-          : item
-      )
+              ...item,
+              manualMatchId: menuItemId || null,
+              selected: menuItemId ? true : item.selected,
+            }
+          : item,
+      ),
     );
   };
 
   // Update quantity
   const updateQuantity = (index: number, quantity: number) => {
-    setReviewItems((prev) =>
-      prev.map((item, i) =>
-        i === index ? { ...item, editedQuantity: quantity } : item
-      )
-    );
+    setReviewItems((prev) => prev.map((item, i) => (i === index ? { ...item, editedQuantity: quantity } : item)));
   };
 
   // Get the menu item ID to use for import
@@ -330,9 +296,7 @@ const ParSheetImportDialog = ({
 
   // Handle import
   const handleImport = async () => {
-    const itemsToImport = reviewItems.filter(
-      (item) => item.selected && getMenuItemId(item)
-    );
+    const itemsToImport = reviewItems.filter((item) => item.selected && getMenuItemId(item));
 
     if (itemsToImport.length === 0) {
       toast({
@@ -365,7 +329,6 @@ const ParSheetImportDialog = ({
 
       onImportComplete();
       onOpenChange(false);
-
     } catch (err) {
       console.error("Import error:", err);
       toast({
@@ -378,7 +341,9 @@ const ParSheetImportDialog = ({
   };
 
   const selectedCount = reviewItems.filter((item) => item.selected && getMenuItemId(item)).length;
-  const matchedCount = reviewItems.filter((item) => item.matchResult.confidence !== "none" || item.manualMatchId).length;
+  const matchedCount = reviewItems.filter(
+    (item) => item.matchResult.confidence !== "none" || item.manualMatchId,
+  ).length;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -396,10 +361,9 @@ const ParSheetImportDialog = ({
         {step === "upload" && (
           <div className="flex-1 flex flex-col gap-4">
             <div
-              className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${dragActive
-                ? "border-primary bg-primary/5"
-                : "border-muted-foreground/25 hover:border-primary/50"
-                }`}
+              className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
+                dragActive ? "border-primary bg-primary/5" : "border-muted-foreground/25 hover:border-primary/50"
+              }`}
               onDragOver={(e) => {
                 e.preventDefault();
                 setDragActive(true);
@@ -433,17 +397,10 @@ const ParSheetImportDialog = ({
                     <FileSpreadsheet className="h-10 w-10 text-muted-foreground" />
                     <div>
                       <p className="font-medium">Drop par sheet here</p>
-                      <p className="text-sm text-muted-foreground">
-                        or click to browse (Excel, CSV, PDF)
-                      </p>
+                      <p className="text-sm text-muted-foreground">or click to browse (Excel, CSV, PDF)</p>
                     </div>
                   </div>
-                  <input
-                    type="file"
-                    accept=".xlsx,.xls,.csv,.pdf"
-                    className="hidden"
-                    onChange={handleFileChange}
-                  />
+                  <input type="file" accept=".xlsx,.xls,.csv,.pdf" className="hidden" onChange={handleFileChange} />
                 </label>
               )}
             </div>
@@ -464,10 +421,7 @@ const ParSheetImportDialog = ({
               </div>
               <div className="flex items-center gap-2 ml-auto">
                 <span className="text-sm text-muted-foreground">Import to:</span>
-                <Select
-                  value={importDay.toString()}
-                  onValueChange={(v) => setImportDay(parseInt(v))}
-                >
+                <Select value={importDay.toString()} onValueChange={(v) => setImportDay(parseInt(v))}>
                   <SelectTrigger className="w-36">
                     <SelectValue />
                   </SelectTrigger>
@@ -499,10 +453,9 @@ const ParSheetImportDialog = ({
                   return (
                     <div
                       key={index}
-                      className={`p-3 rounded-md border transition-colors ${item.selected && menuItemId
-                        ? "bg-primary/5 border-primary/20"
-                        : "bg-muted/30"
-                        }`}
+                      className={`p-3 rounded-md border transition-colors ${
+                        item.selected && menuItemId ? "bg-primary/5 border-primary/20" : "bg-muted/30"
+                      }`}
                     >
                       <div className="flex items-start gap-3">
                         <Checkbox
@@ -518,16 +471,14 @@ const ParSheetImportDialog = ({
                             {item.matchResult.confidence !== "none" && !item.manualMatchId && (
                               <span
                                 className={`text-xs px-1.5 py-0.5 rounded ${getConfidenceColor(
-                                  item.matchResult.confidence
+                                  item.matchResult.confidence,
                                 )} bg-current/10`}
                               >
                                 {getConfidenceLabel(item.matchResult.confidence)}
                               </span>
                             )}
                             {item.manualMatchId && (
-                              <span className="text-xs px-1.5 py-0.5 rounded text-blue-500 bg-blue-500/10">
-                                Manual
-                              </span>
+                              <span className="text-xs px-1.5 py-0.5 rounded text-blue-500 bg-blue-500/10">Manual</span>
                             )}
                           </div>
 
@@ -583,14 +534,10 @@ const ParSheetImportDialog = ({
                                 type="number"
                                 min="0"
                                 value={item.editedQuantity}
-                                onChange={(e) =>
-                                  updateQuantity(index, parseInt(e.target.value) || 0)
-                                }
+                                onChange={(e) => updateQuantity(index, parseInt(e.target.value) || 0)}
                                 className="w-20 h-8"
                               />
-                              {item.unit && (
-                                <span className="text-xs text-muted-foreground">{item.unit}</span>
-                              )}
+                              {item.unit && <span className="text-xs text-muted-foreground">{item.unit}</span>}
                             </div>
                           </div>
                         </div>
