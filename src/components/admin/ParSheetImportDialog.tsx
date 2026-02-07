@@ -1,3 +1,10 @@
+To resolve the issue where the list of items isn't scrollable, I will replace the custom `ScrollArea` component with a standard HTML `div` that has `overflow-y-auto`. This is often more robust for complex flex layouts within dialogs.
+
+Here is the updated code for `src/components/admin/ParSheetImportDialog.tsx`.
+
+### 📄 Copy & Paste this into `src/components/admin/ParSheetImportDialog.tsx`
+
+```tsx
 import { useState, useCallback, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import {
@@ -10,7 +17,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select,
   SelectContent,
@@ -481,8 +487,8 @@ const ParSheetImportDialog = ({
               {selectedCount} of {reviewItems.length} items selected for import
             </div>
 
-            {/* Items List */}
-            <ScrollArea className="flex-1 min-h-0 max-h-[50vh] border rounded-md">
+            {/* Items List - SCROLLABLE CONTAINER FIX */}
+            <div className="flex-1 min-h-0 max-h-[50vh] border rounded-md overflow-y-auto">
               <div className="p-2 space-y-2">
                 {reviewItems.map((item, index) => {
                   const menuItemId = getMenuItemId(item);
@@ -593,7 +599,7 @@ const ParSheetImportDialog = ({
                   );
                 })}
               </div>
-            </ScrollArea>
+            </div>
 
             {/* Actions */}
             <div className="flex justify-end gap-2">
