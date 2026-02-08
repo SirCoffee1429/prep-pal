@@ -11,6 +11,95 @@ import { corsHeaders, jsonResponse, errorResponse, inferStation } from "../_shar
 
 type DocumentType = "recipe" | "menu_item" | "par_sheet" | "sales" | "unknown";
 
+/**
+ * Robustly extract JSON from AI response that may contain markdown or mixed text
+ */
+function extractJsonFromResponse(response: string): unknown {
+  // Step 1: Remove markdown code blocks
+  let cleaned = response
+    .replace(/```json\s*/gi, "")
+    .replace(/```\s*/g, "")
+    .trim();
+
+  // Step 2: Find JSON boundaries
+  const jsonStart = cleaned.indexOf("{");
+  const jsonEnd = cleaned.lastIndexOf("}");
+
+  if (jsonStart === -1 || jsonEnd === -1) {
+    // Check if it's an array
+    const arrStart = cleaned.indexOf("[");
+    const arrEnd = cleaned.lastIndexOf("]");
+    if (arrStart !== -1 && arrEnd !== -1) {
+      cleaned = cleaned.substring(arrStart, arrEnd + 1);
+    } else {
+      throw new Error("No JSON object or array found in response");
+    }
+  } else {
+    cleaned = cleaned.substring(jsonStart, jsonEnd + 1);
+  }
+
+  // Step 3: Attempt parse with error handling
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    // Step 4: Try to fix common issues
+    cleaned = cleaned
+      .replace(/,\s*}/g, "}") // Remove trailing commas
+      .replace(/,\s*]/g, "]")
+      .replace(/[\x00-\x1F\x7F]/g, ""); // Remove control characters
+
+    // Attempt to repair truncated JSON by adding missing closing brackets/braces
+    let braces = 0, brackets = 0;
+    for (const char of cleaned) {
+      if (char === '{') braces++;
+      if (char === '}') braces--;
+      if (char === '[') brackets++;
+      if (char === ']') brackets--;
+    }
+    while (brackets > 0) { cleaned += ']'; brackets--; }
+    while (braces > 0) { cleaned += '}'; braces--; }
+
+    return JSON.parse(cleaned);
+  }
+}
+
+/**
+ * Consolidate array responses (from multi-sheet workbooks) into a single object
+ */
+function consolidateArrayResponse(arr: any[]): { type: string; data: any } {
+  if (arr.length === 0) {
+    return { type: "unknown", data: {} };
+  }
+
+  // Find the primary type from the array
+  const types = arr.map(item => item.type).filter(Boolean);
+  const primaryType = types[0] || "recipe";
+
+  // Consolidate based on type
+  if (primaryType === "recipe") {
+    const allRecipes: any[] = [];
+    for (const item of arr) {
+      if (item.data?.recipes) {
+        allRecipes.push(...item.data.recipes);
+      }
+    }
+    return { type: "recipe", data: { recipes: allRecipes } };
+  }
+
+  if (primaryType === "menu_item") {
+    const allMenuItems: any[] = [];
+    for (const item of arr) {
+      if (item.data?.menu_items) {
+        allMenuItems.push(...item.data.menu_items);
+      }
+    }
+    return { type: "menu_item", data: { menu_items: allMenuItems } };
+  }
+
+  // Default: return first item
+  return arr[0];
+}
+
 interface AnalyzeRequest {
   fileContent: string;
   mimeType: string;
@@ -341,16 +430,18 @@ STATION INFERENCE RULES:
       throw new Error("AI did not return any content");
     }
 
-    // Parse JSON from response
+    // Parse JSON from response with robust extraction
     let parsedData;
     try {
-      // Handle potential markdown code blocks
-      const jsonMatch = content.match(/```(?:json)?\s*([\s\S]*?)```/);
-      const jsonStr = jsonMatch ? jsonMatch[1].trim() : content.trim();
-      parsedData = JSON.parse(jsonStr);
+      parsedData = extractJsonFromResponse(content);
     } catch (parseError) {
       console.error("Failed to parse AI response:", content);
       throw new Error("Failed to parse document data from AI response");
+    }
+
+    // Handle array responses (multi-sheet workbooks) - consolidate into single object
+    if (Array.isArray(parsedData)) {
+      parsedData = consolidateArrayResponse(parsedData);
     }
 
     // Validate response structure
