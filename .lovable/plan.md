@@ -1,69 +1,72 @@
 
-## Diagnosis (root cause)
-The “No Menu Items Available” message is not coming from the database being empty. Your database has active menu items (79), and the app is successfully able to fetch them elsewhere (the Par Levels table is already showing items).
+## Overview
+Reorganize the Menu Items tab to display items grouped by their kitchen station in expandable folder-like sections. Each station (Grill, Saute, Fry, Salad, Line) will have its own collapsible folder containing only the menu items assigned to that station.
 
-The actual bug is in **how `ParSheetImportDialog` triggers the fetch**:
+## Visual Design
+```text
++---------------------------------------+
+| Menu Items                            |
+| [Delete All] [Unified Import] [+ Add] |
++---------------------------------------+
+|                                       |
+| > Grill (12 items)                    |
+|   +----------------------------+      |
+|   | Name | Unit | Recipe | ... |      |
+|   |--------------------------- |      |
+|   | Ribeye Steak | portions | ..      |
+|   | Chicken Breast | portions | ..    |
+|   +----------------------------+      |
+|                                       |
+| > Saute (8 items)                     |
+|   [collapsed]                         |
+|                                       |
+| > Fry (15 items)                      |
+|   [collapsed]                         |
+|                                       |
+| > Salad (10 items)                    |
+|   [collapsed]                         |
+|                                       |
+| > Line (5 items)                      |
+|   [collapsed]                         |
++---------------------------------------+
+```
 
-- `ParManagement` opens the dialog by setting `open` state (`setImportDialogOpen(true)`).
-- `ParSheetImportDialog` currently fetches menu items only inside `handleOpenChange(newOpen)`.
-- **But `handleOpenChange` is only called when the Dialog itself requests an open-state change** (escape key, clicking overlay, internal close), not when the parent flips `open` from `false → true`.
-- Result: when you open the dialog from the button, **the fetch never runs**, `menuItems` stays `[]`, and the UI shows the empty-state (“No Menu Items Available”).
+## Technical Approach
+Use the existing shadcn Accordion component (`src/components/ui/accordion.tsx`) to create expandable station folders. Each folder will contain a table of menu items for that specific station.
 
-This perfectly matches the screenshot: you see the empty-state (not the spinner, not an error), meaning no fetch ran.
+## Implementation Steps
 
-## Fix strategy
-Trigger the menu item fetch when the `open` prop becomes `true`, not only via `onOpenChange`.
+### 1. Update MenuItemManagement.tsx
+- Import Accordion components from `@/components/ui/accordion`
+- Add Folder icon from `lucide-react`
+- Group menu items by station using a useMemo hook:
+  ```typescript
+  const groupedByStation = useMemo(() => {
+    return STATIONS.map(station => ({
+      ...station,
+      items: menuItems.filter(item => item.station === station.value)
+    }));
+  }, [menuItems]);
+  ```
 
-We’ll add a `useEffect` watching `open`:
-- When `open === true`:
-  - Reset dialog state (`step`, `reviewItems`, `importDay`, `menuItemsError`)
-  - Call `fetchMenuItems()`
+### 2. Replace Flat Table with Accordion Structure
+- Replace the single `<Table>` with an `<Accordion type="multiple">` allowing multiple folders open at once
+- Each station becomes an `<AccordionItem>`:
+  - Trigger shows station name + item count (e.g., "Grill (12 items)")
+  - Content shows a table of items for that station only
 
-We’ll keep `onOpenChange` as a pure “propagate to parent” handler.
+### 3. Styling for Kitchen UI
+- Add folder icon next to each station name
+- Show item count badge
+- Keep existing edit/delete functionality per row
+- Ensure touch-friendly targets (60px+ height)
 
-## Implementation steps (code changes)
-### 1) Update `src/components/admin/ParSheetImportDialog.tsx`
-- Add `useEffect` import.
-- Add:
+## Files to Modify
+- `src/components/admin/MenuItemManagement.tsx`
 
-  - `useEffect(() => { if (open) { ... } }, [open, selectedDay, fetchMenuItems])`
-
-- Inside the effect when opening:
-  - `setStep("upload")`
-  - `setReviewItems([])`
-  - `setImportDay(selectedDay)` (ensures the day defaults correctly every time)
-  - `setMenuItemsError(null)`
-  - call `fetchMenuItems()`
-
-- Simplify `handleOpenChange` to:
-  - `onOpenChange(newOpen)`
-  - optionally clear local state on close (not required, but nice hygiene)
-
-### 2) Verify behavior in UI
-After change, opening “Import Par Sheet” should:
-- briefly show “Loading menu items…” spinner
-- then show the drop zone (because `menuItems.length > 0`)
-- and allow file selection/drop.
-
-## Verification checklist (“hot kitchen” pre-mortem)
-What can still break and how we prevent it:
-
-1) **Menu fetch never runs** (current bug)
-   - Prevented: `useEffect` guarantees fetch on `open===true`.
-
-2) **Dialog shows empty-state too quickly**
-   - Prevented: `isLoadingItems` is set before the request; UI shows spinner instead of “No Menu Items”.
-
-3) **Selected day mismatch**
-   - Prevented: we reset `importDay` to `selectedDay` on every open.
-
-4) **Auth / permissions issues**
-   - If menu item fetch fails, new UI will show the concrete error via `menuItemsError`.
-
-## Scope
-Only frontend code changes required.
-No database/RLS changes required.
-
-## Deliverables
-- One-file patch:
-  - `src/components/admin/ParSheetImportDialog.tsx`
+## Preserved Functionality
+- Add/Edit/Delete individual menu items (unchanged)
+- Delete All button (unchanged)
+- Import from Excel (unchanged)
+- Unified Import wizard (unchanged)
+- All existing form fields and validation (unchanged)
