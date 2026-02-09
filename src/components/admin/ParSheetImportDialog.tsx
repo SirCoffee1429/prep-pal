@@ -6,9 +6,12 @@ import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, Upload, FileSpreadsheet, Check, AlertCircle } from "lucide-react";
+import { Loader2, Upload, FileSpreadsheet, Check, AlertCircle, Plus } from "lucide-react";
 import { findBestMatch, getConfidenceColor, getConfidenceLabel, MatchResult } from "@/lib/itemMatching";
 import * as XLSX from "xlsx";
+import type { Database } from "@/integrations/supabase/types";
+
+type KitchenStation = Database["public"]["Enums"]["kitchen_station"];
 
 interface MenuItem {
   id: string;
@@ -27,6 +30,11 @@ interface ReviewItem extends ParsedItem {
   matchResult: MatchResult;
   manualMatchId: string | null;
   editedQuantity: number;
+  // New fields for creating new items
+  createNew: boolean;
+  editedName: string;
+  newItemType: "menu_item" | "recipe";
+  newItemStation: KitchenStation;
 }
 
 interface ParSheetImportDialogProps {
@@ -44,6 +52,14 @@ const DAYS = [
   { value: 4, label: "Thursday" },
   { value: 5, label: "Friday" },
   { value: 6, label: "Saturday" },
+];
+
+const STATIONS: { value: KitchenStation; label: string }[] = [
+  { value: "grill", label: "Grill" },
+  { value: "saute", label: "Sauté" },
+  { value: "fry", label: "Fry" },
+  { value: "salad", label: "Salad" },
+  { value: "line", label: "Line" },
 ];
 
 const ParSheetImportDialog = ({ open, onOpenChange, selectedDay, onImportComplete }: ParSheetImportDialogProps) => {
@@ -77,14 +93,6 @@ const ParSheetImportDialog = ({ open, onOpenChange, selectedDay, onImportComplet
       }
 
       setMenuItems(data || []);
-
-      if (!data || data.length === 0) {
-        toast({
-          title: "No Menu Items Available",
-          description: "Please import menu items first before importing par levels.",
-          variant: "destructive",
-        });
-      }
     } catch (err) {
       console.error("Error loading menu items:", err);
       setMenuItems([]);
@@ -212,6 +220,11 @@ const ParSheetImportDialog = ({ open, onOpenChange, selectedDay, onImportComplet
           matchResult,
           manualMatchId: null,
           editedQuantity: item.par_quantity,
+          // New fields for create new
+          createNew: false,
+          editedName: item.name,
+          newItemType: "menu_item",
+          newItemStation: "grill",
         };
       });
 
@@ -257,12 +270,12 @@ const ParSheetImportDialog = ({ open, onOpenChange, selectedDay, onImportComplet
     setReviewItems((prev) => prev.map((item, i) => (i === index ? { ...item, selected: !item.selected } : item)));
   };
 
-  // Toggle all items
+  // Toggle all items (only matched or create new)
   const toggleAll = (selected: boolean) => {
     setReviewItems((prev) =>
       prev.map((item) => ({
         ...item,
-        selected: selected && (item.matchResult.confidence !== "none" || item.manualMatchId !== null),
+        selected: selected && (item.matchResult.confidence !== "none" || item.manualMatchId !== null || item.createNew),
       })),
     );
   };
@@ -276,6 +289,7 @@ const ParSheetImportDialog = ({ open, onOpenChange, selectedDay, onImportComplet
               ...item,
               manualMatchId: menuItemId || null,
               selected: menuItemId ? true : item.selected,
+              createNew: menuItemId ? false : item.createNew,
             }
           : item,
       ),
@@ -287,21 +301,69 @@ const ParSheetImportDialog = ({ open, onOpenChange, selectedDay, onImportComplet
     setReviewItems((prev) => prev.map((item, i) => (i === index ? { ...item, editedQuantity: quantity } : item)));
   };
 
-  // Get the menu item ID to use for import
+  // Toggle create new mode
+  const toggleCreateNew = (index: number, createNew: boolean) => {
+    setReviewItems((prev) =>
+      prev.map((item, i) =>
+        i === index
+          ? {
+              ...item,
+              createNew,
+              selected: createNew ? true : item.selected,
+              manualMatchId: createNew ? null : item.manualMatchId,
+            }
+          : item,
+      ),
+    );
+  };
+
+  // Update edited name
+  const updateEditedName = (index: number, name: string) => {
+    setReviewItems((prev) => prev.map((item, i) => (i === index ? { ...item, editedName: name } : item)));
+  };
+
+  // Update new item type
+  const updateNewItemType = (index: number, type: "menu_item" | "recipe") => {
+    setReviewItems((prev) => prev.map((item, i) => (i === index ? { ...item, newItemType: type } : item)));
+  };
+
+  // Update new item station
+  const updateNewItemStation = (index: number, station: KitchenStation) => {
+    setReviewItems((prev) => prev.map((item, i) => (i === index ? { ...item, newItemStation: station } : item)));
+  };
+
+  // Get the menu item ID to use for import (existing items only)
   const getMenuItemId = (item: ReviewItem): string | null => {
+    if (item.createNew) return null; // Will be created during import
     if (item.manualMatchId) return item.manualMatchId;
     if (item.matchResult.item) return item.matchResult.item.id;
     return null;
   };
 
+  // Check if item can be selected (matched OR creating new)
+  const canSelect = (item: ReviewItem): boolean => {
+    return !!getMenuItemId(item) || item.createNew;
+  };
+
   // Handle import
   const handleImport = async () => {
-    const itemsToImport = reviewItems.filter((item) => item.selected && getMenuItemId(item));
+    const itemsToImport = reviewItems.filter((item) => item.selected && (getMenuItemId(item) || item.createNew));
 
     if (itemsToImport.length === 0) {
       toast({
         title: "No items to import",
-        description: "Select at least one matched item to import.",
+        description: "Select at least one matched item or create new items to import.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Validate new items have names
+    const newItemsWithEmptyNames = itemsToImport.filter((item) => item.createNew && !item.editedName.trim());
+    if (newItemsWithEmptyNames.length > 0) {
+      toast({
+        title: "Missing names",
+        description: "All new items must have a name.",
         variant: "destructive",
       });
       return;
@@ -310,11 +372,68 @@ const ParSheetImportDialog = ({ open, onOpenChange, selectedDay, onImportComplet
     setStep("importing");
 
     try {
-      const upserts = itemsToImport.map((item) => ({
-        menu_item_id: getMenuItemId(item)!,
-        day_of_week: importDay,
-        par_quantity: item.editedQuantity,
-      }));
+      // Phase 1: Create new menu items
+      const newItemsToCreate = itemsToImport.filter((item) => item.createNew);
+      const createdItemsMap = new Map<number, string>(); // original index -> new menu_item_id
+
+      for (const item of newItemsToCreate) {
+        const originalIndex = reviewItems.indexOf(item);
+
+        // Create menu item
+        const { data, error } = await supabase
+          .from("menu_items")
+          .insert({
+            name: item.editedName.trim(),
+            station: item.newItemStation,
+            unit: "portions",
+          })
+          .select("id")
+          .single();
+
+        if (error) {
+          // Check for unique constraint violation
+          if (error.code === "23505") {
+            toast({
+              title: "Duplicate name",
+              description: `"${item.editedName.trim()}" already exists. Please choose a different name.`,
+              variant: "destructive",
+            });
+          } else {
+            toast({
+              title: "Error creating item",
+              description: error.message,
+              variant: "destructive",
+            });
+          }
+          setStep("review");
+          return;
+        }
+
+        createdItemsMap.set(originalIndex, data.id);
+
+        // Also create recipe if type is "recipe"
+        if (item.newItemType === "recipe") {
+          const { error: recipeError } = await supabase.from("recipes").insert({ name: item.editedName.trim() });
+          if (recipeError) {
+            console.warn("Failed to create recipe:", recipeError);
+            // Continue anyway - menu item was created
+          }
+        }
+      }
+
+      // Phase 2: Upsert par levels
+      const upserts = itemsToImport
+        .map((item) => {
+          const originalIndex = reviewItems.indexOf(item);
+          const menuItemId = item.createNew ? createdItemsMap.get(originalIndex) : getMenuItemId(item);
+
+          return {
+            menu_item_id: menuItemId!,
+            day_of_week: importDay,
+            par_quantity: item.editedQuantity,
+          };
+        })
+        .filter((u) => u.menu_item_id);
 
       const { error } = await supabase.from("par_levels").upsert(upserts, {
         onConflict: "menu_item_id,day_of_week",
@@ -322,9 +441,12 @@ const ParSheetImportDialog = ({ open, onOpenChange, selectedDay, onImportComplet
 
       if (error) throw error;
 
+      const newItemCount = newItemsToCreate.length;
+      const existingItemCount = itemsToImport.length - newItemCount;
+
       toast({
         title: "Import complete",
-        description: `Updated ${itemsToImport.length} par levels for ${DAYS.find((d) => d.value === importDay)?.label}`,
+        description: `Updated ${existingItemCount} par levels${newItemCount > 0 ? `, created ${newItemCount} new items` : ""} for ${DAYS.find((d) => d.value === importDay)?.label}`,
       });
 
       onImportComplete();
@@ -340,10 +462,11 @@ const ParSheetImportDialog = ({ open, onOpenChange, selectedDay, onImportComplet
     }
   };
 
-  const selectedCount = reviewItems.filter((item) => item.selected && getMenuItemId(item)).length;
+  const selectedCount = reviewItems.filter((item) => item.selected && canSelect(item)).length;
   const matchedCount = reviewItems.filter(
-    (item) => item.matchResult.confidence !== "none" || item.manualMatchId,
+    (item) => item.matchResult.confidence !== "none" || item.manualMatchId || item.createNew,
   ).length;
+  const newItemCount = reviewItems.filter((item) => item.selected && item.createNew).length;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -384,12 +507,6 @@ const ParSheetImportDialog = ({ open, onOpenChange, selectedDay, onImportComplet
                   <p className="font-medium">Couldn't load menu items</p>
                   <p className="text-sm">{menuItemsError}</p>
                   <p className="text-sm">Try refreshing the page or logging in again.</p>
-                </div>
-              ) : menuItems.length === 0 ? (
-                <div className="flex flex-col items-center gap-3 text-muted-foreground">
-                  <AlertCircle className="h-10 w-10 text-destructive" />
-                  <p className="font-medium">No Menu Items Available</p>
-                  <p className="text-sm">Please import menu items first before importing par levels.</p>
                 </div>
               ) : (
                 <label className="cursor-pointer">
@@ -438,7 +555,8 @@ const ParSheetImportDialog = ({ open, onOpenChange, selectedDay, onImportComplet
 
             {/* Summary */}
             <div className="text-sm text-muted-foreground">
-              {selectedCount} of {reviewItems.length} items selected for import
+              {selectedCount} of {reviewItems.length} items selected
+              {newItemCount > 0 && <span className="text-primary"> ({newItemCount} new)</span>}
             </div>
 
             {/* Items List - SCROLLABLE CONTAINER FIX */}
@@ -449,18 +567,23 @@ const ParSheetImportDialog = ({ open, onOpenChange, selectedDay, onImportComplet
                   const matchedName = item.manualMatchId
                     ? menuItems.find((m) => m.id === item.manualMatchId)?.name
                     : item.matchResult.item?.name;
+                  const isUnmatched = item.matchResult.confidence === "none" && !item.manualMatchId;
 
                   return (
                     <div
                       key={index}
                       className={`p-3 rounded-md border transition-colors ${
-                        item.selected && menuItemId ? "bg-primary/5 border-primary/20" : "bg-muted/30"
+                        item.selected && canSelect(item)
+                          ? item.createNew
+                            ? "bg-green-500/5 border-green-500/20"
+                            : "bg-primary/5 border-primary/20"
+                          : "bg-muted/30"
                       }`}
                     >
                       <div className="flex items-start gap-3">
                         <Checkbox
-                          checked={item.selected && !!menuItemId}
-                          disabled={!menuItemId}
+                          checked={item.selected && canSelect(item)}
+                          disabled={!canSelect(item)}
                           onCheckedChange={() => toggleItemSelection(index)}
                           className="mt-1"
                         />
@@ -468,7 +591,7 @@ const ParSheetImportDialog = ({ open, onOpenChange, selectedDay, onImportComplet
                           {/* Original name and confidence */}
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="font-medium truncate">{item.name}</span>
-                            {item.matchResult.confidence !== "none" && !item.manualMatchId && (
+                            {item.matchResult.confidence !== "none" && !item.manualMatchId && !item.createNew && (
                               <span
                                 className={`text-xs px-1.5 py-0.5 rounded ${getConfidenceColor(
                                   item.matchResult.confidence,
@@ -480,19 +603,21 @@ const ParSheetImportDialog = ({ open, onOpenChange, selectedDay, onImportComplet
                             {item.manualMatchId && (
                               <span className="text-xs px-1.5 py-0.5 rounded text-blue-500 bg-blue-500/10">Manual</span>
                             )}
+                            {item.createNew && (
+                              <span className="text-xs px-1.5 py-0.5 rounded text-green-500 bg-green-500/10">
+                                + New
+                              </span>
+                            )}
                           </div>
 
-                          {/* Match dropdown or status */}
-                          <div className="flex items-center gap-3 flex-wrap">
-                            {item.matchResult.confidence === "none" && !item.manualMatchId ? (
+                          {/* Unmatched: Show create new option */}
+                          {isUnmatched && !item.createNew && (
+                            <div className="flex items-center gap-3 flex-wrap">
                               <div className="flex items-center gap-2">
                                 <AlertCircle className="h-4 w-4 text-yellow-500" />
-                                <Select
-                                  value={item.manualMatchId || ""}
-                                  onValueChange={(v) => updateManualMatch(index, v)}
-                                >
+                                <Select value={item.manualMatchId || ""} onValueChange={(v) => updateManualMatch(index, v)}>
                                   <SelectTrigger className="w-48 h-8 text-sm">
-                                    <SelectValue placeholder="Select item..." />
+                                    <SelectValue placeholder="Select existing..." />
                                   </SelectTrigger>
                                   <SelectContent>
                                     {menuItems.map((m) => (
@@ -503,7 +628,106 @@ const ParSheetImportDialog = ({ open, onOpenChange, selectedDay, onImportComplet
                                   </SelectContent>
                                 </Select>
                               </div>
-                            ) : (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-8 text-green-600 border-green-600/30 hover:bg-green-500/10"
+                                onClick={() => toggleCreateNew(index, true)}
+                              >
+                                <Plus className="h-3 w-3 mr-1" />
+                                Create New
+                              </Button>
+                              {/* Quantity input */}
+                              <div className="flex items-center gap-2 ml-auto">
+                                <span className="text-sm text-muted-foreground">Par:</span>
+                                <Input
+                                  type="number"
+                                  min="0"
+                                  value={item.editedQuantity}
+                                  onChange={(e) => updateQuantity(index, parseInt(e.target.value) || 0)}
+                                  className="w-20 h-8"
+                                />
+                                {item.unit && <span className="text-xs text-muted-foreground">{item.unit}</span>}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Create New Form */}
+                          {item.createNew && (
+                            <div className="space-y-2 pt-1 border-t border-green-500/20">
+                              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                                <div className="space-y-1">
+                                  <label className="text-xs text-muted-foreground">Name</label>
+                                  <Input
+                                    value={item.editedName}
+                                    onChange={(e) => updateEditedName(index, e.target.value)}
+                                    className="h-8 text-sm"
+                                    placeholder="Item name"
+                                  />
+                                </div>
+                                <div className="space-y-1">
+                                  <label className="text-xs text-muted-foreground">Type</label>
+                                  <Select
+                                    value={item.newItemType}
+                                    onValueChange={(v) => updateNewItemType(index, v as "menu_item" | "recipe")}
+                                  >
+                                    <SelectTrigger className="h-8 text-sm">
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="menu_item">Menu Item</SelectItem>
+                                      <SelectItem value="recipe">Recipe</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                                <div className="space-y-1">
+                                  <label className="text-xs text-muted-foreground">Station</label>
+                                  <Select
+                                    value={item.newItemStation}
+                                    onValueChange={(v) => updateNewItemStation(index, v as KitchenStation)}
+                                  >
+                                    <SelectTrigger className="h-8 text-sm">
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      {STATIONS.map((s) => (
+                                        <SelectItem key={s.value} value={s.value}>
+                                          {s.label}
+                                        </SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                              </div>
+                              <div className="flex items-center justify-between">
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-7 text-xs text-muted-foreground"
+                                  onClick={() => toggleCreateNew(index, false)}
+                                >
+                                  Cancel
+                                </Button>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm text-muted-foreground">Par:</span>
+                                  <Input
+                                    type="number"
+                                    min="0"
+                                    value={item.editedQuantity}
+                                    onChange={(e) => updateQuantity(index, parseInt(e.target.value) || 0)}
+                                    className="w-20 h-8"
+                                  />
+                                  {item.unit && <span className="text-xs text-muted-foreground">{item.unit}</span>}
+                                </div>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Matched item display */}
+                          {!isUnmatched && !item.createNew && (
+                            <div className="flex items-center gap-3 flex-wrap">
                               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                                 <Check className="h-4 w-4 text-green-500" />
                                 <span>→ {matchedName}</span>
@@ -525,21 +749,21 @@ const ParSheetImportDialog = ({ open, onOpenChange, selectedDay, onImportComplet
                                   </Select>
                                 )}
                               </div>
-                            )}
 
-                            {/* Quantity input */}
-                            <div className="flex items-center gap-2 ml-auto">
-                              <span className="text-sm text-muted-foreground">Par:</span>
-                              <Input
-                                type="number"
-                                min="0"
-                                value={item.editedQuantity}
-                                onChange={(e) => updateQuantity(index, parseInt(e.target.value) || 0)}
-                                className="w-20 h-8"
-                              />
-                              {item.unit && <span className="text-xs text-muted-foreground">{item.unit}</span>}
+                              {/* Quantity input */}
+                              <div className="flex items-center gap-2 ml-auto">
+                                <span className="text-sm text-muted-foreground">Par:</span>
+                                <Input
+                                  type="number"
+                                  min="0"
+                                  value={item.editedQuantity}
+                                  onChange={(e) => updateQuantity(index, parseInt(e.target.value) || 0)}
+                                  className="w-20 h-8"
+                                />
+                                {item.unit && <span className="text-xs text-muted-foreground">{item.unit}</span>}
+                              </div>
                             </div>
-                          </div>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -556,6 +780,7 @@ const ParSheetImportDialog = ({ open, onOpenChange, selectedDay, onImportComplet
               <Button onClick={handleImport} disabled={selectedCount === 0}>
                 <Upload className="mr-2 h-4 w-4" />
                 Import {selectedCount} Items
+                {newItemCount > 0 && ` (${newItemCount} new)`}
               </Button>
             </div>
           </div>
