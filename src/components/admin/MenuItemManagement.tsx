@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,9 +36,16 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Pencil, Trash2, Loader2, Upload, FileStack } from "lucide-react";
+import { Plus, Pencil, Trash2, Loader2, Upload, FileStack, Folder } from "lucide-react";
 import * as XLSX from "xlsx";
 import type { Database } from "@/integrations/supabase/types";
 import MenuItemImportPreview, { ParsedMenuItem } from "./MenuItemImportPreview";
@@ -417,6 +424,14 @@ const MenuItemManagement = () => {
     }
   };
 
+  // Group menu items by station
+  const groupedByStation = useMemo(() => {
+    return STATIONS.map((station) => ({
+      ...station,
+      items: menuItems.filter((item) => item.station === station.value),
+    }));
+  }, [menuItems]);
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -565,55 +580,76 @@ const MenuItemManagement = () => {
           </div>
         </CardHeader>
         <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Station</TableHead>
-                <TableHead>Unit</TableHead>
-                <TableHead>Recipe</TableHead>
-                <TableHead className="w-24">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {menuItems.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={5} className="text-center text-muted-foreground">
-                    No menu items yet. Add your first item above.
-                  </TableCell>
-                </TableRow>
-              ) : (
-                menuItems.map((item) => (
-                  <TableRow key={item.id}>
-                    <TableCell className="font-medium">{item.name}</TableCell>
-                    <TableCell className="capitalize">{item.station}</TableCell>
-                    <TableCell>{item.unit}</TableCell>
-                    <TableCell>
-                      {recipes.find((r) => r.id === item.recipe_id)?.name || "-"}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex gap-2">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => openDialog(item)}
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => handleDelete(item.id)}
-                        >
-                          <Trash2 className="h-4 w-4 text-destructive" />
-                        </Button>
+          {menuItems.length === 0 ? (
+            <div className="text-center text-muted-foreground py-8">
+              No menu items yet. Add your first item above.
+            </div>
+          ) : (
+            <Accordion type="multiple" className="w-full">
+              {groupedByStation.map((stationGroup) => (
+                <AccordionItem key={stationGroup.value} value={stationGroup.value}>
+                  <AccordionTrigger className="min-h-[60px] hover:no-underline">
+                    <div className="flex items-center gap-3">
+                      <Folder className="h-5 w-5 text-primary" />
+                      <span className="font-semibold text-lg">{stationGroup.label}</span>
+                      <Badge variant="secondary" className="ml-2">
+                        {stationGroup.items.length} {stationGroup.items.length === 1 ? 'item' : 'items'}
+                      </Badge>
+                    </div>
+                  </AccordionTrigger>
+                  <AccordionContent>
+                    {stationGroup.items.length === 0 ? (
+                      <div className="text-center text-muted-foreground py-4">
+                        No items in this station.
                       </div>
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
+                    ) : (
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Name</TableHead>
+                            <TableHead>Unit</TableHead>
+                            <TableHead>Recipe</TableHead>
+                            <TableHead className="w-24">Actions</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {stationGroup.items.map((item) => (
+                            <TableRow key={item.id} className="min-h-[60px]">
+                              <TableCell className="font-medium">{item.name}</TableCell>
+                              <TableCell>{item.unit}</TableCell>
+                              <TableCell>
+                                {recipes.find((r) => r.id === item.recipe_id)?.name || "-"}
+                              </TableCell>
+                              <TableCell>
+                                <div className="flex gap-2">
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => openDialog(item)}
+                                    className="h-11 w-11"
+                                  >
+                                    <Pencil className="h-4 w-4" />
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => handleDelete(item.id)}
+                                    className="h-11 w-11"
+                                  >
+                                    <Trash2 className="h-4 w-4 text-destructive" />
+                                  </Button>
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    )}
+                  </AccordionContent>
+                </AccordionItem>
+              ))}
+            </Accordion>
+          )}
         </CardContent>
       </Card>
 
