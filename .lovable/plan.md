@@ -1,85 +1,226 @@
 
 
 ## Overview
-Reorganize the Par Levels tab to display items grouped by kitchen station in expandable folder-like sections, matching the pattern we just implemented for Menu Items. Each station (Grill, Saute, Fry, Salad, Line) will have its own collapsible folder containing the par level inputs for items in that station.
+Enhance the Par Sheet Import dialog to allow creating new menu items on-the-fly when an imported item doesn't match any existing menu item. Currently, unmatched items can only be linked to existing menu items via a dropdown. This change will allow users to select unmatched items, edit their name, specify their type (Menu Item or Recipe), and assign a station.
 
-## Visual Design
+## Current Behavior vs. New Behavior
+
 ```text
-+-----------------------------------------------+
-| Par Levels                                    |
-| Set target stock levels for each menu item... |
-+-----------------------------------------------+
-| [Day Dropdown] [Delete All] [Import] [Save]   |
-+-----------------------------------------------+
-|                                               |
-| > Grill (12 items)                            |
-|   +--------------------------------+          |
-|   | Item | Unit | Par Level       |          |
-|   |--------------------------------|          |
-|   | Ribeye Steak | portions | [8] |          |
-|   | Chicken | portions | [12]     |          |
-|   +--------------------------------+          |
-|                                               |
-| > Saute (8 items)                             |
-|   [collapsed]                                 |
-|                                               |
-| > Fry (15 items)                              |
-|   [collapsed]                                 |
-|                                               |
-| > Salad (10 items)                            |
-|   [collapsed]                                 |
-|                                               |
-| > Line (5 items)                              |
-|   [collapsed]                                 |
-+-----------------------------------------------+
+CURRENT:
++------------------------------------------+
+| Chicken Breast                           |
+| [!] [Select item...      v]  Par: [10]   |
+|     ^ Disabled checkbox if no match      |
++------------------------------------------+
+
+NEW:
++------------------------------------------+
+| [x] Chicken Breast                       |
+|     [Select existing...  v]              |
+|     -- OR Create New --                  |
+|     Name: [Chicken Breast    ]           |
+|     Type: [Menu Item  v]                 |
+|     Station: [Grill  v]                  |
+|     Par: [10]                            |
++------------------------------------------+
 ```
 
 ## Technical Approach
-Use the same shadcn Accordion component pattern from MenuItemManagement. Remove the station filter dropdown since items are now grouped by station automatically.
+Extend the `ReviewItem` interface to track "create new" fields and update the UI to show creation options for unmatched items. During import, first create any new menu items, then upsert par levels.
 
 ## Implementation Steps
 
-### 1. Update Imports
-- Import Accordion components from `@/components/ui/accordion`
-- Import Badge from `@/components/ui/badge`
-- Add Folder icon from `lucide-react`
-- Add useMemo from React
-
-### 2. Group Items by Station
-Add a useMemo hook to group menu items:
+### 1. Extend the ReviewItem Interface
+Add new fields to track the "create new" state:
 ```typescript
-const groupedByStation = useMemo(() => {
-  return STATIONS.map((station) => ({
-    ...station,
-    items: menuItems.filter((item) => item.station === station.value),
-  }));
-}, [menuItems]);
+interface ReviewItem extends ParsedItem {
+  selected: boolean;
+  matchResult: MatchResult;
+  manualMatchId: string | null;
+  editedQuantity: number;
+  // New fields for creating new items
+  createNew: boolean;
+  editedName: string;
+  newItemType: "menu_item" | "recipe";
+  newItemStation: KitchenStation;
+}
 ```
 
-### 3. Remove Station Filter Dropdown
-Since items are now organized by station folders, the station filter dropdown becomes redundant and will be removed. Only the day-of-week dropdown remains for selecting which day's par levels to view/edit.
+### 2. Update STATIONS Constant
+Add the stations array (matching MenuItemManagement pattern):
+```typescript
+const STATIONS: { value: KitchenStation; label: string }[] = [
+  { value: "grill", label: "Grill" },
+  { value: "saute", label: "Sauté" },
+  { value: "fry", label: "Fry" },
+  { value: "salad", label: "Salad" },
+  { value: "line", label: "Line" },
+];
+```
 
-### 4. Replace Flat Table with Accordion Structure
-- Replace the single `<Table>` with `<Accordion type="multiple">`
-- Each station becomes an `<AccordionItem>`:
-  - Trigger shows: Folder icon + Station name + Item count badge
-  - Content shows a table with columns: Item, Unit, Par Level (input)
-- The "Station" column is removed from the table since items are already grouped by station
+### 3. Update Import Types
+Import the `KitchenStation` type from the database types file.
 
-### 5. Styling for Kitchen UI
-- Add folder icon next to each station name
-- Show item count badge with station-appropriate styling
-- Ensure touch-friendly input fields (keep existing w-24 input size)
-- Match the visual styling from MenuItemManagement accordion
+### 4. Initialize ReviewItem with New Fields
+When parsing items, initialize the new fields:
+```typescript
+const reviews: ReviewItem[] = parsedItems.map((item) => {
+  const matchResult = findBestMatch(item.name, menuItems);
+  return {
+    ...item,
+    selected: matchResult.confidence !== "none",
+    matchResult,
+    manualMatchId: null,
+    editedQuantity: item.par_quantity,
+    // New fields
+    createNew: false,
+    editedName: item.name,
+    newItemType: "menu_item",
+    newItemStation: "grill",
+  };
+});
+```
+
+### 5. Add Helper Functions for New Item Creation
+```typescript
+// Toggle create new mode
+const toggleCreateNew = (index: number, createNew: boolean) => {
+  setReviewItems((prev) =>
+    prev.map((item, i) =>
+      i === index
+        ? {
+            ...item,
+            createNew,
+            selected: createNew ? true : item.selected,
+            manualMatchId: createNew ? null : item.manualMatchId,
+          }
+        : item
+    )
+  );
+};
+
+// Update edited name
+const updateEditedName = (index: number, name: string) => {
+  setReviewItems((prev) =>
+    prev.map((item, i) => (i === index ? { ...item, editedName: name } : item))
+  );
+};
+
+// Update new item type
+const updateNewItemType = (index: number, type: "menu_item" | "recipe") => {
+  setReviewItems((prev) =>
+    prev.map((item, i) => (i === index ? { ...item, newItemType: type } : item))
+  );
+};
+
+// Update new item station
+const updateNewItemStation = (index: number, station: KitchenStation) => {
+  setReviewItems((prev) =>
+    prev.map((item, i) => (i === index ? { ...item, newItemStation: station } : item))
+  );
+};
+```
+
+### 6. Update the isSelectable Logic
+Allow selection when either matched OR creating new:
+```typescript
+const canSelect = (item: ReviewItem): boolean => {
+  return !!getMenuItemId(item) || item.createNew;
+};
+```
+
+### 7. Update the Import Handler
+Modify `handleImport` to first create new menu items, then upsert par levels:
+```typescript
+const handleImport = async () => {
+  const itemsToImport = reviewItems.filter(
+    (item) => item.selected && (getMenuItemId(item) || item.createNew)
+  );
+  // ...
+  
+  // Phase 1: Create new menu items
+  const newItemsToCreate = itemsToImport.filter((item) => item.createNew);
+  const createdItemsMap = new Map<number, string>(); // index -> new menu_item_id
+  
+  for (let i = 0; i < newItemsToCreate.length; i++) {
+    const item = newItemsToCreate[i];
+    const originalIndex = reviewItems.indexOf(item);
+    
+    // Create menu item
+    const { data, error } = await supabase
+      .from("menu_items")
+      .insert({
+        name: item.editedName.trim(),
+        station: item.newItemStation,
+        unit: "portions",
+      })
+      .select("id")
+      .single();
+    
+    if (error) {
+      // Handle error, show toast
+      continue;
+    }
+    
+    createdItemsMap.set(originalIndex, data.id);
+    
+    // Also create recipe if type is "recipe"
+    if (item.newItemType === "recipe") {
+      await supabase.from("recipes").insert({ name: item.editedName.trim() });
+    }
+  }
+  
+  // Phase 2: Upsert par levels
+  const upserts = itemsToImport.map((item) => {
+    const originalIndex = reviewItems.indexOf(item);
+    const menuItemId = item.createNew
+      ? createdItemsMap.get(originalIndex)
+      : getMenuItemId(item);
+    
+    return {
+      menu_item_id: menuItemId!,
+      day_of_week: importDay,
+      par_quantity: item.editedQuantity,
+    };
+  }).filter((u) => u.menu_item_id);
+  // ...
+};
+```
+
+### 8. Update the UI for Unmatched Items
+For items with `confidence === "none"`, show:
+- Toggle between "Select existing" and "Create new"
+- When "Create new" is active, show editable fields for name, type, and station
+- Checkbox becomes enabled when "Create new" is toggled on
+
+```text
+UI Structure for Unmatched Item:
++----------------------------------------------------+
+| [x] Original Name from Par Sheet                   |
+|                                                    |
+|     [Select existing...  v]  [+ Create New]        |
+|                                                    |
+|     -- OR when Create New is clicked --            |
+|                                                    |
+|     Name:    [________________]                    |
+|     Type:    [Menu Item  v]                        |
+|     Station: [Grill      v]                        |
+|                                          Par: [10] |
++----------------------------------------------------+
+```
 
 ## Files to Modify
-- `src/components/admin/ParManagement.tsx`
+- `src/components/admin/ParSheetImportDialog.tsx`
+
+## Edge Cases Handled
+1. **Duplicate names**: If user tries to create an item with a name that already exists, the insert will fail due to the unique constraint on `menu_items.name`. Show an appropriate error toast.
+2. **Empty name**: Validate that `editedName` is not empty before allowing import.
+3. **Switching modes**: When user toggles between "Select existing" and "Create new", clear the other mode's selection.
 
 ## Preserved Functionality
-- Day of week selection dropdown (unchanged)
-- Par level input fields per item (unchanged)
-- Save Changes button with dirty state tracking (unchanged)
-- Delete All button with confirmation dialog (unchanged)
-- Import Par Sheet button and dialog (unchanged)
-- Real-time par value updates via the changes Map (unchanged)
+- All existing match/fuzzy match logic (unchanged)
+- Day of week selection (unchanged)
+- Par quantity editing (unchanged)
+- Select All Matched toggle (unchanged)
+- Import progress and toast notifications (unchanged)
 
