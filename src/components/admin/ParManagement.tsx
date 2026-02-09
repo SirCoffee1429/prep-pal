@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -28,9 +28,16 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, Save, Upload, Trash2 } from "lucide-react";
+import { Loader2, Save, Upload, Trash2, Folder } from "lucide-react";
 import type { Database } from "@/integrations/supabase/types";
 import ParSheetImportDialog from "./ParSheetImportDialog";
 
@@ -72,12 +79,19 @@ const ParManagement = () => {
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
   const [parLevels, setParLevels] = useState<Map<string, number>>(new Map());
   const [selectedDay, setSelectedDay] = useState(new Date().getDay());
-  const [selectedStation, setSelectedStation] = useState<KitchenStation | "all">("all");
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [changes, setChanges] = useState<Map<string, number>>(new Map());
   const [importDialogOpen, setImportDialogOpen] = useState(false);
+
+  // Group menu items by station for accordion display
+  const groupedByStation = useMemo(() => {
+    return STATIONS.map((station) => ({
+      ...station,
+      items: menuItems.filter((item) => item.station === station.value),
+    }));
+  }, [menuItems]);
 
   useEffect(() => {
     fetchData();
@@ -188,11 +202,6 @@ const ParManagement = () => {
     }
   };
 
-  const filteredItems =
-    selectedStation === "all"
-      ? menuItems
-      : menuItems.filter((item) => item.station === selectedStation);
-
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -224,24 +233,6 @@ const ParManagement = () => {
                 {DAYS.map((day) => (
                   <SelectItem key={day.value} value={day.value.toString()}>
                     {day.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="w-48">
-            <Select
-              value={selectedStation}
-              onValueChange={(v) => setSelectedStation(v as KitchenStation | "all")}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Stations</SelectItem>
-                {STATIONS.map((s) => (
-                  <SelectItem key={s.value} value={s.value}>
-                    {s.label}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -296,43 +287,66 @@ const ParManagement = () => {
           </div>
         </div>
 
-        {/* Table */}
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Item</TableHead>
-              <TableHead>Station</TableHead>
-              <TableHead>Unit</TableHead>
-              <TableHead className="w-32">Par Level</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {filteredItems.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={4} className="text-center text-muted-foreground">
-                  No menu items found. Add items in the Menu Items tab.
-                </TableCell>
-              </TableRow>
-            ) : (
-              filteredItems.map((item) => (
-                <TableRow key={item.id}>
-                  <TableCell className="font-medium">{item.name}</TableCell>
-                  <TableCell className="capitalize">{item.station}</TableCell>
-                  <TableCell>{item.unit}</TableCell>
-                  <TableCell>
-                    <Input
-                      type="number"
-                      min="0"
-                      value={getParValue(item.id)}
-                      onChange={(e) => handleParChange(item.id, e.target.value)}
-                      className="w-24"
-                    />
-                  </TableCell>
-                </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
+        {/* Station Accordion */}
+        {menuItems.length === 0 ? (
+          <div className="text-center py-12 text-muted-foreground">
+            No menu items found. Add items in the Menu Items tab.
+          </div>
+        ) : (
+          <Accordion type="multiple" className="space-y-2">
+            {groupedByStation.map((station) => (
+              <AccordionItem
+                key={station.value}
+                value={station.value}
+                className="border rounded-lg px-4"
+              >
+                <AccordionTrigger className="hover:no-underline py-4">
+                  <div className="flex items-center gap-3">
+                    <Folder className="h-5 w-5 text-muted-foreground" />
+                    <span className="font-semibold">{station.label}</span>
+                    <Badge variant="secondary" className="ml-2">
+                      {station.items.length} items
+                    </Badge>
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent>
+                  {station.items.length === 0 ? (
+                    <div className="py-4 text-center text-muted-foreground">
+                      No items in this station
+                    </div>
+                  ) : (
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Item</TableHead>
+                          <TableHead>Unit</TableHead>
+                          <TableHead className="w-32">Par Level</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {station.items.map((item) => (
+                          <TableRow key={item.id} className="h-14">
+                            <TableCell className="font-medium">{item.name}</TableCell>
+                            <TableCell>{item.unit}</TableCell>
+                            <TableCell>
+                              <Input
+                                type="number"
+                                min="0"
+                                value={getParValue(item.id)}
+                                onChange={(e) => handleParChange(item.id, e.target.value)}
+                                className="w-24 h-11"
+                              />
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  )}
+                </AccordionContent>
+              </AccordionItem>
+            ))}
+          </Accordion>
+        )}
       </CardContent>
 
       <ParSheetImportDialog
