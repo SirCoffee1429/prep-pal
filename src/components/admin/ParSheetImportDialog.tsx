@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -6,7 +6,8 @@ import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, Upload, FileSpreadsheet, Check, AlertCircle, Plus } from "lucide-react";
+import { Loader2, Upload, FileSpreadsheet, Check, AlertCircle, Plus, Trash2 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { findBestMatch, getConfidenceColor, getConfidenceLabel, MatchResult } from "@/lib/itemMatching";
 import * as XLSX from "xlsx";
 import type { Database } from "@/integrations/supabase/types";
@@ -345,6 +346,27 @@ const ParSheetImportDialog = ({ open, onOpenChange, selectedDay, onImportComplet
     return !!getMenuItemId(item) || item.createNew;
   };
 
+  // Detect duplicate items by name (case-insensitive)
+  const duplicateIndices = useMemo(() => {
+    const nameCount = new Map<string, number[]>();
+    reviewItems.forEach((item, i) => {
+      const key = item.name.toLowerCase().trim();
+      nameCount.set(key, [...(nameCount.get(key) || []), i]);
+    });
+    const dupes = new Set<number>();
+    nameCount.forEach((indices) => {
+      if (indices.length > 1) indices.forEach((i) => dupes.add(i));
+    });
+    return dupes;
+  }, [reviewItems]);
+
+  const duplicateCount = duplicateIndices.size;
+
+  // Remove an item from the review list
+  const removeItem = (index: number) => {
+    setReviewItems((prev) => prev.filter((_, i) => i !== index));
+  };
+
   // Handle import
   const handleImport = async () => {
     const itemsToImport = reviewItems.filter((item) => item.selected && (getMenuItemId(item) || item.createNew));
@@ -557,6 +579,7 @@ const ParSheetImportDialog = ({ open, onOpenChange, selectedDay, onImportComplet
             <div className="text-sm text-muted-foreground">
               {selectedCount} of {reviewItems.length} items selected
               {newItemCount > 0 && <span className="text-primary"> ({newItemCount} new)</span>}
+              {duplicateCount > 0 && <span className="text-yellow-500"> · {duplicateCount} duplicates found</span>}
             </div>
 
             {/* Items List - SCROLLABLE CONTAINER FIX */}
@@ -587,10 +610,27 @@ const ParSheetImportDialog = ({ open, onOpenChange, selectedDay, onImportComplet
                           onCheckedChange={() => toggleItemSelection(index)}
                           className="mt-1"
                         />
+                        {duplicateIndices.has(index) && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 mt-0.5 text-destructive hover:text-destructive hover:bg-destructive/10"
+                            onClick={() => removeItem(index)}
+                            title="Remove duplicate"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
                         <div className="flex-1 min-w-0 space-y-2">
                           {/* Original name and confidence */}
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="font-medium truncate">{item.name}</span>
+                            {duplicateIndices.has(index) && (
+                              <Badge className="bg-yellow-500/15 text-yellow-600 border-yellow-500/30 hover:bg-yellow-500/20 text-xs px-1.5 py-0">
+                                Duplicate
+                              </Badge>
+                            )}
                             {item.matchResult.confidence !== "none" && !item.manualMatchId && !item.createNew && (
                               <span
                                 className={`text-xs px-1.5 py-0.5 rounded ${getConfidenceColor(
