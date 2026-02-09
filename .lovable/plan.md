@@ -1,72 +1,85 @@
 
+
 ## Overview
-Reorganize the Menu Items tab to display items grouped by their kitchen station in expandable folder-like sections. Each station (Grill, Saute, Fry, Salad, Line) will have its own collapsible folder containing only the menu items assigned to that station.
+Reorganize the Par Levels tab to display items grouped by kitchen station in expandable folder-like sections, matching the pattern we just implemented for Menu Items. Each station (Grill, Saute, Fry, Salad, Line) will have its own collapsible folder containing the par level inputs for items in that station.
 
 ## Visual Design
 ```text
-+---------------------------------------+
-| Menu Items                            |
-| [Delete All] [Unified Import] [+ Add] |
-+---------------------------------------+
-|                                       |
-| > Grill (12 items)                    |
-|   +----------------------------+      |
-|   | Name | Unit | Recipe | ... |      |
-|   |--------------------------- |      |
-|   | Ribeye Steak | portions | ..      |
-|   | Chicken Breast | portions | ..    |
-|   +----------------------------+      |
-|                                       |
-| > Saute (8 items)                     |
-|   [collapsed]                         |
-|                                       |
-| > Fry (15 items)                      |
-|   [collapsed]                         |
-|                                       |
-| > Salad (10 items)                    |
-|   [collapsed]                         |
-|                                       |
-| > Line (5 items)                      |
-|   [collapsed]                         |
-+---------------------------------------+
++-----------------------------------------------+
+| Par Levels                                    |
+| Set target stock levels for each menu item... |
++-----------------------------------------------+
+| [Day Dropdown] [Delete All] [Import] [Save]   |
++-----------------------------------------------+
+|                                               |
+| > Grill (12 items)                            |
+|   +--------------------------------+          |
+|   | Item | Unit | Par Level       |          |
+|   |--------------------------------|          |
+|   | Ribeye Steak | portions | [8] |          |
+|   | Chicken | portions | [12]     |          |
+|   +--------------------------------+          |
+|                                               |
+| > Saute (8 items)                             |
+|   [collapsed]                                 |
+|                                               |
+| > Fry (15 items)                              |
+|   [collapsed]                                 |
+|                                               |
+| > Salad (10 items)                            |
+|   [collapsed]                                 |
+|                                               |
+| > Line (5 items)                              |
+|   [collapsed]                                 |
++-----------------------------------------------+
 ```
 
 ## Technical Approach
-Use the existing shadcn Accordion component (`src/components/ui/accordion.tsx`) to create expandable station folders. Each folder will contain a table of menu items for that specific station.
+Use the same shadcn Accordion component pattern from MenuItemManagement. Remove the station filter dropdown since items are now grouped by station automatically.
 
 ## Implementation Steps
 
-### 1. Update MenuItemManagement.tsx
+### 1. Update Imports
 - Import Accordion components from `@/components/ui/accordion`
+- Import Badge from `@/components/ui/badge`
 - Add Folder icon from `lucide-react`
-- Group menu items by station using a useMemo hook:
-  ```typescript
-  const groupedByStation = useMemo(() => {
-    return STATIONS.map(station => ({
-      ...station,
-      items: menuItems.filter(item => item.station === station.value)
-    }));
-  }, [menuItems]);
-  ```
+- Add useMemo from React
 
-### 2. Replace Flat Table with Accordion Structure
-- Replace the single `<Table>` with an `<Accordion type="multiple">` allowing multiple folders open at once
+### 2. Group Items by Station
+Add a useMemo hook to group menu items:
+```typescript
+const groupedByStation = useMemo(() => {
+  return STATIONS.map((station) => ({
+    ...station,
+    items: menuItems.filter((item) => item.station === station.value),
+  }));
+}, [menuItems]);
+```
+
+### 3. Remove Station Filter Dropdown
+Since items are now organized by station folders, the station filter dropdown becomes redundant and will be removed. Only the day-of-week dropdown remains for selecting which day's par levels to view/edit.
+
+### 4. Replace Flat Table with Accordion Structure
+- Replace the single `<Table>` with `<Accordion type="multiple">`
 - Each station becomes an `<AccordionItem>`:
-  - Trigger shows station name + item count (e.g., "Grill (12 items)")
-  - Content shows a table of items for that station only
+  - Trigger shows: Folder icon + Station name + Item count badge
+  - Content shows a table with columns: Item, Unit, Par Level (input)
+- The "Station" column is removed from the table since items are already grouped by station
 
-### 3. Styling for Kitchen UI
+### 5. Styling for Kitchen UI
 - Add folder icon next to each station name
-- Show item count badge
-- Keep existing edit/delete functionality per row
-- Ensure touch-friendly targets (60px+ height)
+- Show item count badge with station-appropriate styling
+- Ensure touch-friendly input fields (keep existing w-24 input size)
+- Match the visual styling from MenuItemManagement accordion
 
 ## Files to Modify
-- `src/components/admin/MenuItemManagement.tsx`
+- `src/components/admin/ParManagement.tsx`
 
 ## Preserved Functionality
-- Add/Edit/Delete individual menu items (unchanged)
-- Delete All button (unchanged)
-- Import from Excel (unchanged)
-- Unified Import wizard (unchanged)
-- All existing form fields and validation (unchanged)
+- Day of week selection dropdown (unchanged)
+- Par level input fields per item (unchanged)
+- Save Changes button with dirty state tracking (unchanged)
+- Delete All button with confirmation dialog (unchanged)
+- Import Par Sheet button and dialog (unchanged)
+- Real-time par value updates via the changes Map (unchanged)
+
