@@ -22,6 +22,7 @@ interface ParsedItem {
   existing_id?: string;
   original_data: any;
   source_file: string;
+  ingredients: string[];
 }
 
 interface UnifiedImportWizardProps {
@@ -163,6 +164,7 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
                 status: "new" as const,
                 original_data: item,
                 source_file: file.name,
+                ingredients: [],
               }));
               pdfItems.forEach(addItemIfUnique);
             }
@@ -176,6 +178,7 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
                 status: "new" as const,
                 original_data: item,
                 source_file: file.name,
+                ingredients: [],
               }));
               recipeItems.forEach(addItemIfUnique);
             }
@@ -193,6 +196,20 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
             const csv = XLSX.utils.sheet_to_csv(worksheet);
 
             if (!csv.trim()) continue;
+
+            // === INGREDIENT EXTRACTION (A3:A23) ===
+            const ingredientNames: string[] = [];
+            for (let row = 3; row <= 23; row++) {
+              const cellRef = `A${row}`;
+              const cell = worksheet[cellRef];
+              if (cell && cell.v) {
+                let val = String(cell.v).trim();
+                val = val.replace(/\s*\(see\s+recipe\)\s*/i, "").trim();
+                if (val && val.length > 1) {
+                  ingredientNames.push(val);
+                }
+              }
+            }
 
             // === A1 CELL PRE-CHECK (per AGENTS.md rules) ===
             // Check cell A1 to determine type before AI processing:
@@ -248,6 +265,7 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
                 status: "new" as const,
                 original_data: item,
                 source_file: `${file.name} • ${sheetName}`,
+                ingredients: ingredientNames,
               }));
               forcedItems.forEach(addItemIfUnique);
             } else {
@@ -261,6 +279,7 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
                   status: "new" as const,
                   original_data: item,
                   source_file: `${file.name} • ${sheetName}`,
+                  ingredients: ingredientNames,
                 }));
                 sheetItems.forEach(addItemIfUnique);
               }
@@ -274,6 +293,7 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
                   status: "new" as const,
                   original_data: item,
                   source_file: `${file.name} • ${sheetName}`,
+                  ingredients: ingredientNames,
                 }));
                 recipeItems.forEach(addItemIfUnique);
               }
@@ -304,6 +324,7 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
               status: "new" as const,
               original_data: item,
               source_file: file.name,
+              ingredients: [],
             }));
             salesItems.forEach(addItemIfUnique);
           }
@@ -317,6 +338,7 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
               status: "new" as const,
               original_data: item,
               source_file: file.name,
+              ingredients: [],
             }));
             fileItems.forEach(addItemIfUnique);
           }
@@ -330,6 +352,7 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
               status: "new" as const,
               original_data: item,
               source_file: file.name,
+              ingredients: [],
             }));
             recipeItems.forEach(addItemIfUnique);
           }
@@ -369,14 +392,28 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
     let successCount = 0;
 
     try {
+      // Preflight: fetch all existing menu item names -> ids for BOM linking
+      const { data: existingMenuItems } = await supabase.from("menu_items").select("id, name");
+      const menuItemsByName = new Map<string, string>(
+        (existingMenuItems || []).map((m) => [normalizeName(m.name), m.id])
+      );
+
+      // Track items created in this import so we can look them up for BOM
+      const createdItemIds = new Map<string, string>();
+
+      // === PHASE 1: Create menu items and recipes ===
       for (const item of items.filter(i => i.status !== "duplicate_db")) {
         if (item.type === "menu_item") {
-          const { error } = await supabase.from("menu_items").insert({
+          const { data, error } = await supabase.from("menu_items").insert({
             name: item.name,
             station: item.station,
             unit: "portions",
-          });
-          if (!error) successCount++;
+            is_parent: item.ingredients.length > 0,
+          }).select("id").single();
+          if (!error && data) {
+            successCount++;
+            createdItemIds.set(normalizeName(item.name), data.id);
+          }
         } else if (item.type === "prep_recipe") {
           const { error } = await supabase.from("recipes").insert({
             name: item.name,
@@ -387,26 +424,69 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
           });
           if (!error) successCount++;
         } else if (item.type === "sales_data") {
-          // Best-effort match by name. 
-          // Note: SalesUpload.tsx is preferred for sales as it supports manual matching and date selection.
           const { data: match } = await supabase
             .from("menu_items")
             .select("id")
-            .ilike("name", item.name) // Use case-insensitive match
+            .ilike("name", item.name)
             .maybeSingle();
 
           if (match) {
             const { error } = await supabase.from("sales_data").insert({
               menu_item_id: match.id,
               quantity_sold: Number(item.original_data.quantity),
-              sales_date: new Date(Date.now() - 86400000).toISOString().split('T')[0], // Default to Yesterday
+              sales_date: new Date(Date.now() - 86400000).toISOString().split('T')[0],
             });
             if (!error) successCount++;
           }
         }
       }
 
-      toast({ title: "Success!", description: `Imported ${successCount} items.` });
+      // === PHASE 2 & 3: Create component items and BOM links ===
+      const itemsWithIngredients = items.filter(i => i.ingredients.length > 0 && i.status !== "duplicate_db");
+
+      // Also include items that exist in DB but have ingredients (they need BOM links)
+      const existingParentsWithIngredients = items.filter(i => i.ingredients.length > 0 && i.status === "duplicate_db");
+
+      for (const item of [...itemsWithIngredients, ...existingParentsWithIngredients]) {
+        // Look up parent ID (from phase 1 or existing)
+        const parentId = createdItemIds.get(normalizeName(item.name)) || menuItemsByName.get(normalizeName(item.name));
+        if (!parentId) continue;
+
+        // Mark as parent
+        await supabase.from("menu_items").update({ is_parent: true } as any).eq("id", parentId);
+
+        for (const ingredientName of item.ingredients) {
+          const normalizedIngredient = normalizeName(ingredientName);
+
+          // Find or create component
+          let componentId = createdItemIds.get(normalizedIngredient) || menuItemsByName.get(normalizedIngredient);
+
+          if (!componentId) {
+            const { data: newComponent } = await supabase.from("menu_items").insert({
+              name: ingredientName,
+              station: "line" as KitchenStation,
+              unit: "portions",
+              is_parent: false,
+            }).select("id").single();
+
+            if (newComponent) {
+              componentId = newComponent.id;
+              createdItemIds.set(normalizedIngredient, newComponent.id);
+            }
+          }
+
+          if (componentId) {
+            // Create BOM link (ignore conflicts for idempotency)
+            await supabase.from("menu_item_components").upsert({
+              parent_item_id: parentId,
+              component_item_id: componentId,
+              quantity_per_serving: 1,
+            } as any, { onConflict: "parent_item_id,component_item_id" });
+          }
+        }
+      }
+
+      toast({ title: "Success!", description: `Imported ${successCount} items with BOM links.` });
       handleClose();
       onComplete();
     } catch (error) {
@@ -490,11 +570,18 @@ export default function UnifiedImportWizard({ open, onOpenChange, onComplete }: 
                         {items.map((item) => (
                           <tr key={item.id} className="border-b hover:bg-muted/50">
                             <td className="p-2">
-                              <Input
-                                value={item.name}
-                                onChange={(e) => updateItem(item.id, "name", e.target.value)}
-                                className="h-8 min-w-[180px]"
-                              />
+                              <div>
+                                <Input
+                                  value={item.name}
+                                  onChange={(e) => updateItem(item.id, "name", e.target.value)}
+                                  className="h-8 min-w-[180px]"
+                                />
+                                {item.ingredients.length > 0 && (
+                                  <Badge variant="secondary" className="mt-1 text-xs">
+                                    {item.ingredients.length} components
+                                  </Badge>
+                                )}
+                              </div>
                             </td>
                             <td className="p-2">
                               <Select value={item.type} onValueChange={(val: any) => updateItem(item.id, "type", val)}>
