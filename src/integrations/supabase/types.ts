@@ -14,11 +14,51 @@ export type Database = {
   }
   public: {
     Tables: {
+      menu_item_components: {
+        Row: {
+          component_item_id: string
+          created_at: string
+          id: string
+          parent_item_id: string
+          quantity_per_serving: number
+        }
+        Insert: {
+          component_item_id: string
+          created_at?: string
+          id?: string
+          parent_item_id: string
+          quantity_per_serving?: number
+        }
+        Update: {
+          component_item_id?: string
+          created_at?: string
+          id?: string
+          parent_item_id?: string
+          quantity_per_serving?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "menu_item_components_component_item_id_fkey"
+            columns: ["component_item_id"]
+            isOneToOne: false
+            referencedRelation: "menu_items"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "menu_item_components_parent_item_id_fkey"
+            columns: ["parent_item_id"]
+            isOneToOne: false
+            referencedRelation: "menu_items"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       menu_items: {
         Row: {
           created_at: string
           id: string
           is_active: boolean
+          is_parent: boolean
           name: string
           recipe_id: string | null
           station: Database["public"]["Enums"]["kitchen_station"]
@@ -29,6 +69,7 @@ export type Database = {
           created_at?: string
           id?: string
           is_active?: boolean
+          is_parent?: boolean
           name: string
           recipe_id?: string | null
           station: Database["public"]["Enums"]["kitchen_station"]
@@ -39,6 +80,7 @@ export type Database = {
           created_at?: string
           id?: string
           is_active?: boolean
+          is_parent?: boolean
           name?: string
           recipe_id?: string | null
           station?: Database["public"]["Enums"]["kitchen_station"]

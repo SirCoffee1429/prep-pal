@@ -19,8 +19,6 @@ serve(async (req: Request) => {
     const supabase = createClient(supabaseUrl, supabaseKey);
 
     // Date Logic
-    // If salesDate is provided, that is "Yesterday". We are prepping for "Today" (salesDate + 1 day).
-    // Default: Yesterday = actual yesterday, Today = actual today.
     let yesterdayDate: Date;
     let todayDate: Date;
 
@@ -41,22 +39,30 @@ serve(async (req: Request) => {
 
     console.log(`Generating prep list for ${todayStr}. Using sales/par from ${yesterdayStr}.`);
 
-    // 1. Fetch Menu Items with Par Levels for BOTH days
+    // 1. Fetch all menu items with par levels and is_parent flag
     const { data: menuItems, error: menuError } = await supabase
       .from("menu_items")
-      .select(`
-        id,
-        name,
-        par_levels (
-          day_of_week,
-          par_quantity
-        )
-      `)
+      .select(`id, name, is_parent, par_levels (day_of_week, par_quantity)`)
       .eq("is_active", true);
 
     if (menuError) throw menuError;
 
-    // 2. Fetch Yesterday's Sales
+    // 2. Fetch BOM relationships
+    const { data: bomData, error: bomError } = await supabase
+      .from("menu_item_components")
+      .select("parent_item_id, component_item_id, quantity_per_serving");
+
+    if (bomError) throw bomError;
+
+    // Build BOM lookup: parent_id -> [{component_id, qty}]
+    const bomByParent = new Map<string, { component_id: string; qty: number }[]>();
+    for (const row of bomData || []) {
+      const entries = bomByParent.get(row.parent_item_id) || [];
+      entries.push({ component_id: row.component_item_id, qty: Number(row.quantity_per_serving) });
+      bomByParent.set(row.parent_item_id, entries);
+    }
+
+    // 3. Fetch Yesterday's Sales
     const { data: salesData, error: salesError } = await supabase
       .from("sales_data")
       .select("menu_item_id, quantity_sold")
@@ -64,44 +70,66 @@ serve(async (req: Request) => {
 
     if (salesError) throw salesError;
 
-    const salesMap = new Map(salesData?.map((s: any) => [s.menu_item_id, s.quantity_sold]) || []);
+    // 4. Explode sales into component usage
+    // componentUsage: component_id -> total units consumed
+    const componentUsage = new Map<string, number>();
 
-    // 3. Calculate "The Golden Formula"
-    const prepItems = menuItems
-      ?.map((item: any) => {
-        // Find pars
-        const yesterdayPar: number = item.par_levels?.find((p: any) => p.day_of_week === yesterdayDayOfWeek)?.par_quantity || 0;
-        const todayPar: number = item.par_levels?.find((p: any) => p.day_of_week === todayDayOfWeek)?.par_quantity || 0;
+    for (const sale of salesData || []) {
+      const qty = Number(sale.quantity_sold) || 0;
+      const components = bomByParent.get(sale.menu_item_id);
 
-        // Sales
-        const yesterdaySold: number = Number(salesMap.get(item.id)) || 0;
+      if (components && components.length > 0) {
+        // Parent item: explode into components
+        for (const comp of components) {
+          const current = componentUsage.get(comp.component_id) || 0;
+          componentUsage.set(comp.component_id, current + qty * comp.qty);
+        }
+      } else {
+        // Standalone item (no BOM): usage = direct sales
+        const current = componentUsage.get(sale.menu_item_id) || 0;
+        componentUsage.set(sale.menu_item_id, current + qty);
+      }
+    }
 
-        // Logic: Stock_On_Hand = Yesterday_Par - Yesterday_Sold
-        // (Constraint: Stock cannot be negative)
-        let stockOnHand = yesterdayPar - yesterdaySold;
-        if (stockOnHand < 0) stockOnHand = 0;
+    // Build par lookup by item
+    const parByItem = new Map<string, { yesterday: number; today: number }>();
+    for (const item of menuItems || []) {
+      const yPar = item.par_levels?.find((p: any) => p.day_of_week === yesterdayDayOfWeek)?.par_quantity || 0;
+      const tPar = item.par_levels?.find((p: any) => p.day_of_week === todayDayOfWeek)?.par_quantity || 0;
+      parByItem.set(item.id, { yesterday: yPar, today: tPar });
+    }
 
-        // Logic: Prep_Required = Today_Par - Stock_On_Hand
-        // (Constraint: Prep cannot be negative)
-        let prepNeeded = todayPar - stockOnHand;
-        if (prepNeeded < 0) prepNeeded = 0;
+    // 5. Apply Golden Formula to components and standalone items
+    // Only items that have par levels AND are NOT parents (or standalone)
+    const prepItems: { menu_item_id: string; quantity_needed: number }[] = [];
 
-        return {
-          menu_item_id: item.id,
-          quantity_needed: prepNeeded,
-          debug_info: {
-            y_par: yesterdayPar,
-            y_sold: yesterdaySold,
-            stock: stockOnHand,
-            t_par: todayPar
-          }
-        };
-      })
-      .filter((item: any) => item.quantity_needed > 0) || [];
+    // Set of all parent item IDs (they should NOT appear on prep list)
+    const parentIds = new Set(bomByParent.keys());
 
-    console.log(`Calculated ${prepItems.length} items to prep.`);
+    for (const item of menuItems || []) {
+      // Skip parent items — they don't get prepped directly
+      if (parentIds.has(item.id)) continue;
 
-    // 4. Upsert Logic: Create or Update Prep List for TODAY
+      const pars = parByItem.get(item.id);
+      if (!pars || pars.today === 0) continue; // No par = no prep needed
+
+      const usage = componentUsage.get(item.id) || 0;
+
+      // Golden Formula
+      let stockOnHand = pars.yesterday - usage;
+      if (stockOnHand < 0) stockOnHand = 0;
+
+      let prepNeeded = pars.today - stockOnHand;
+      if (prepNeeded < 0) prepNeeded = 0;
+
+      if (prepNeeded > 0) {
+        prepItems.push({ menu_item_id: item.id, quantity_needed: prepNeeded });
+      }
+    }
+
+    console.log(`Calculated ${prepItems.length} items to prep (BOM-exploded).`);
+
+    // 6. Upsert Prep List for TODAY
     const { data: existingList } = await supabase
       .from("prep_lists")
       .select("id")
@@ -112,11 +140,7 @@ serve(async (req: Request) => {
 
     if (existingList) {
       prepListId = existingList.id;
-      // Clear existing items to maintain clean state
-      await supabase
-        .from("prep_list_items")
-        .delete()
-        .eq("prep_list_id", prepListId);
+      await supabase.from("prep_list_items").delete().eq("prep_list_id", prepListId);
     } else {
       const { data: newList, error: createError } = await supabase
         .from("prep_lists")
@@ -128,12 +152,12 @@ serve(async (req: Request) => {
       prepListId = newList.id;
     }
 
-    // 5. Insert Items
+    // 7. Insert Items
     if (prepItems.length > 0) {
       const { error: insertError } = await supabase
         .from("prep_list_items")
         .insert(
-          prepItems.map((item: any) => ({
+          prepItems.map((item) => ({
             prep_list_id: prepListId,
             menu_item_id: item.menu_item_id,
             quantity_needed: item.quantity_needed,
