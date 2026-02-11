@@ -34,8 +34,6 @@ serve(async (req: Request) => {
 
     const yesterdayStr = yesterdayDate.toISOString().split("T")[0];
     const todayStr = todayDate.toISOString().split("T")[0];
-    const yesterdayDayOfWeek = yesterdayDate.getDay();
-    const todayDayOfWeek = todayDate.getDay();
 
     console.log(`Generating prep list for ${todayStr}. Using sales/par from ${yesterdayStr}.`);
 
@@ -91,12 +89,11 @@ serve(async (req: Request) => {
       }
     }
 
-    // Build par lookup by item
-    const parByItem = new Map<string, { yesterday: number; today: number }>();
+    // Build par lookup by item (single par value, day-independent)
+    const parByItem = new Map<string, number>();
     for (const item of menuItems || []) {
-      const yPar = item.par_levels?.find((p: any) => p.day_of_week === yesterdayDayOfWeek)?.par_quantity || 0;
-      const tPar = item.par_levels?.find((p: any) => p.day_of_week === todayDayOfWeek)?.par_quantity || 0;
-      parByItem.set(item.id, { yesterday: yPar, today: tPar });
+      const par = item.par_levels?.[0]?.par_quantity || 0;
+      parByItem.set(item.id, par);
     }
 
     // 5. Apply Golden Formula to components and standalone items
@@ -110,16 +107,16 @@ serve(async (req: Request) => {
       // Skip parent items — they don't get prepped directly
       if (parentIds.has(item.id)) continue;
 
-      const pars = parByItem.get(item.id);
-      if (!pars || pars.today === 0) continue; // No par = no prep needed
+      const par = parByItem.get(item.id) || 0;
+      if (par === 0) continue; // No par = no prep needed
 
       const usage = componentUsage.get(item.id) || 0;
 
-      // Golden Formula
-      let stockOnHand = pars.yesterday - usage;
+      // Golden Formula (single par value applies to both yesterday and today)
+      let stockOnHand = par - usage;
       if (stockOnHand < 0) stockOnHand = 0;
 
-      let prepNeeded = pars.today - stockOnHand;
+      let prepNeeded = par - stockOnHand;
       if (prepNeeded < 0) prepNeeded = 0;
 
       if (prepNeeded > 0) {
