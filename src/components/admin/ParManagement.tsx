@@ -11,13 +11,6 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -50,21 +43,8 @@ interface MenuItem {
   unit: string;
 }
 
-interface ParLevel {
-  menu_item_id: string;
-  day_of_week: number;
-  par_quantity: number;
-}
 
-const DAYS = [
-  { value: 0, label: "Sunday" },
-  { value: 1, label: "Monday" },
-  { value: 2, label: "Tuesday" },
-  { value: 3, label: "Wednesday" },
-  { value: 4, label: "Thursday" },
-  { value: 5, label: "Friday" },
-  { value: 6, label: "Saturday" },
-];
+
 
 const STATIONS: { value: KitchenStation; label: string }[] = [
   { value: "grill", label: "Grill" },
@@ -78,7 +58,6 @@ const ParManagement = () => {
   const { toast } = useToast();
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
   const [parLevels, setParLevels] = useState<Map<string, number>>(new Map());
-  const [selectedDay, setSelectedDay] = useState(new Date().getDay());
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -95,7 +74,7 @@ const ParManagement = () => {
 
   useEffect(() => {
     fetchData();
-  }, [selectedDay]);
+  }, []);
 
   const fetchData = async () => {
     setIsLoading(true);
@@ -109,8 +88,7 @@ const ParManagement = () => {
           .order("name"),
         supabase
           .from("par_levels")
-          .select("menu_item_id, day_of_week, par_quantity")
-          .eq("day_of_week", selectedDay),
+          .select("menu_item_id, par_quantity"),
       ]);
 
       if (itemsRes.error) throw itemsRes.error;
@@ -158,7 +136,7 @@ const ParManagement = () => {
     try {
       const upserts = Array.from(changes.entries()).map(([menu_item_id, par_quantity]) => ({
         menu_item_id,
-        day_of_week: selectedDay,
+        day_of_week: 0,
         par_quantity,
       }));
 
@@ -215,29 +193,12 @@ const ParManagement = () => {
       <CardHeader>
         <CardTitle>Par Levels</CardTitle>
         <CardDescription>
-          Set target stock levels for each menu item by day of the week
+          Set target stock levels for each menu item
         </CardDescription>
       </CardHeader>
       <CardContent>
         {/* Filters */}
         <div className="mb-6 flex flex-wrap gap-4">
-          <div className="w-48">
-            <Select
-              value={selectedDay.toString()}
-              onValueChange={(v) => setSelectedDay(parseInt(v))}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {DAYS.map((day) => (
-                  <SelectItem key={day.value} value={day.value.toString()}>
-                    {day.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
           <div className="flex gap-2 ml-auto">
             <AlertDialog>
               <AlertDialogTrigger asChild>
@@ -352,7 +313,6 @@ const ParManagement = () => {
       <ParSheetImportDialog
         open={importDialogOpen}
         onOpenChange={setImportDialogOpen}
-        selectedDay={selectedDay}
         onImportComplete={fetchData}
       />
     </Card>

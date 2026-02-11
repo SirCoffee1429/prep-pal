@@ -41,19 +41,10 @@ interface ReviewItem extends ParsedItem {
 interface ParSheetImportDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  selectedDay: number;
   onImportComplete: () => void;
 }
 
-const DAYS = [
-  { value: 0, label: "Sunday" },
-  { value: 1, label: "Monday" },
-  { value: 2, label: "Tuesday" },
-  { value: 3, label: "Wednesday" },
-  { value: 4, label: "Thursday" },
-  { value: 5, label: "Friday" },
-  { value: 6, label: "Saturday" },
-];
+
 
 const STATIONS: { value: KitchenStation; label: string }[] = [
   { value: "grill", label: "Grill" },
@@ -63,7 +54,7 @@ const STATIONS: { value: KitchenStation; label: string }[] = [
   { value: "line", label: "Line" },
 ];
 
-const ParSheetImportDialog = ({ open, onOpenChange, selectedDay, onImportComplete }: ParSheetImportDialogProps) => {
+const ParSheetImportDialog = ({ open, onOpenChange, onImportComplete }: ParSheetImportDialogProps) => {
   const { toast } = useToast();
   const [step, setStep] = useState<"upload" | "review" | "importing">("upload");
   const [isProcessing, setIsProcessing] = useState(false);
@@ -71,7 +62,6 @@ const ParSheetImportDialog = ({ open, onOpenChange, selectedDay, onImportComplet
   const [menuItemsError, setMenuItemsError] = useState<string | null>(null);
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
   const [reviewItems, setReviewItems] = useState<ReviewItem[]>([]);
-  const [importDay, setImportDay] = useState(selectedDay);
   const [dragActive, setDragActive] = useState(false);
 
   // Fetch menu items when dialog opens
@@ -113,11 +103,10 @@ const ParSheetImportDialog = ({ open, onOpenChange, selectedDay, onImportComplet
     if (open) {
       setStep("upload");
       setReviewItems([]);
-      setImportDay(selectedDay);
       setMenuItemsError(null);
       fetchMenuItems();
     }
-  }, [open, selectedDay, fetchMenuItems]);
+  }, [open, fetchMenuItems]);
 
   // Read file content
   const readFileContent = async (file: File): Promise<{ content: string; isBase64: boolean }> => {
@@ -451,7 +440,7 @@ const ParSheetImportDialog = ({ open, onOpenChange, selectedDay, onImportComplet
 
           return {
             menu_item_id: menuItemId!,
-            day_of_week: importDay,
+            day_of_week: 0,
             par_quantity: item.editedQuantity,
           };
         })
@@ -468,7 +457,7 @@ const ParSheetImportDialog = ({ open, onOpenChange, selectedDay, onImportComplet
 
       toast({
         title: "Import complete",
-        description: `Updated ${existingItemCount} par levels${newItemCount > 0 ? `, created ${newItemCount} new items` : ""} for ${DAYS.find((d) => d.value === importDay)?.label}`,
+        description: `Updated ${existingItemCount} par levels${newItemCount > 0 ? `, created ${newItemCount} new items` : ""}`,
       });
 
       onImportComplete();
@@ -557,21 +546,6 @@ const ParSheetImportDialog = ({ open, onOpenChange, selectedDay, onImportComplet
                   onCheckedChange={(checked) => toggleAll(!!checked)}
                 />
                 <span className="text-sm">Select All Matched</span>
-              </div>
-              <div className="flex items-center gap-2 ml-auto">
-                <span className="text-sm text-muted-foreground">Import to:</span>
-                <Select value={importDay.toString()} onValueChange={(v) => setImportDay(parseInt(v))}>
-                  <SelectTrigger className="w-36">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {DAYS.map((day) => (
-                      <SelectItem key={day.value} value={day.value.toString()}>
-                        {day.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
               </div>
             </div>
 
