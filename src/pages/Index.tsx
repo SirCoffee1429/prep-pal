@@ -24,7 +24,7 @@ const Index = () => {
       <div className="flex w-full max-w-md flex-col gap-6">
         {/* Admin Button */}
         <Button
-          onClick={() => navigate("/admin/login")}
+          onClick={() => navigate("/admin")} // TODO: revert to /admin/login for production
           variant="outline"
           className="touch-target flex h-24 flex-col items-center justify-center gap-2 border-2 border-primary/50 bg-card text-xl font-semibold transition-all hover:border-primary hover:bg-primary/10"
         >
